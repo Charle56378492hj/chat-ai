@@ -24,25 +24,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const skipMerchantLoad = useRef(false);
 
   async function loadMerchant(uid: string): Promise<Merchant | null> {
+    // 1) المسار الأساسي: RPC يعمل بصلاحيات SECURITY DEFINER (يتجاوز RLS تمامًا)
     const { data: mId, error: rpcErr } = await supabase.rpc('get_or_create_merchant');
-    if (rpcErr || !mId) {
+
+    if (!rpcErr && mId) {
+      const { data, error } = await supabase
+        .from('merchants')
+        .select('*')
+        .eq('id', mId as string)
+        .maybeSingle();
+      if (!error && data) {
+        const m = data as Merchant;
+        setMerchant(m);
+        return m;
+      }
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.error('merchant select failed:', error.message);
+      }
+    } else {
       // eslint-disable-next-line no-console
       console.error('get_or_create_merchant failed:', rpcErr?.message);
-      setMerchant(null);
-      return null;
     }
-    const { data, error } = await supabase
+
+    // 2) خطة بديلة: القراءة/الإنشاء مباشرة (تعمل حتى لو لم تُطبَّق دالة الـ RPC بعد)
+    const { data: existing } = await supabase
       .from('merchants')
       .select('*')
-      .eq('id', mId as string)
+      .eq('owner_id', uid)
       .maybeSingle();
-    if (error) {
+    if (existing) {
+      const m = existing as Merchant;
+      setMerchant(m);
+      return m;
+    }
+
+    const { data: created, error: insertErr } = await supabase
+      .from('merchants')
+      .insert({ owner_id: uid, company_name: 'متجري' })
+      .select('*')
+      .maybeSingle();
+    if (insertErr) {
       // eslint-disable-next-line no-console
-      console.error('merchant select failed:', error.message);
+      console.error('merchant create failed:', insertErr.message);
       setMerchant(null);
       return null;
     }
-    const m = data as Merchant | null;
+    const m = (created as Merchant | null) ?? null;
     setMerchant(m);
     return m;
   }
