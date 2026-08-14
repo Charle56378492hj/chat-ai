@@ -187,7 +187,7 @@ export function AiStudioPage() {
         ai_model: aiConfig.ai_model ?? 'gpt-4o-mini',
         fallback_to_human: aiConfig.fallback_to_human ?? true,
         system_prompt: aiConfig.system_prompt ?? '',
-        api_key: (aiConfig as Record<string, unknown>).api_key as string ?? '',
+        api_key: ((aiConfig as unknown as Record<string, unknown>).api_key as string | undefined) ?? '',
       });
     }
   }, [aiConfig]);
