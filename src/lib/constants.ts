@@ -34,7 +34,7 @@ export const CONVERSATION_STATUSES = [
 export const AI_PROVIDERS = [
   { value: 'openai', label: 'OpenAI', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'] },
   { value: 'openrouter', label: 'OpenRouter', models: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet', 'google/gemini-flash-1.5'] },
-  { value: 'huggingface', label: 'Hugging Face', models: ['meta-llama/Llama-3-8b-chat', 'mistralai/Mistral-7B-Instruct'] },
+  { value: 'huggingface', label: 'Hugging Face', models: ['meta-llama/Llama-3.1-8B-Instruct', 'mistralai/Mistral-7B-Instruct-v0.3'] },
 ] as const;
 
 export const PRICING_PLANS = [
