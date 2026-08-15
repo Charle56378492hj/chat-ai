@@ -165,6 +165,7 @@ export function AiStudioPage() {
   const { merchant } = useAuth();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [testing, setTesting] = useState(false);
   const [testInput, setTestInput] = useState('');
   const [testOutput, setTestOutput] = useState('');
@@ -229,6 +230,7 @@ export function AiStudioPage() {
     e.preventDefault();
     if (!merchant) return;
     setSaving(true);
+    setSaveError('');
     try {
       const payload = {
         assistant_name: config.assistant_name,
@@ -244,11 +246,18 @@ export function AiStudioPage() {
         api_key: config.api_key,
         is_active: true,
       };
-      if (aiConfig) {
-        await supabase.from('ai_configs').update(payload).eq('id', aiConfig.id);
-      } else {
-        await supabase.from('ai_configs').insert({ ...payload, merchant_id: merchant.id });
+      const { error } = aiConfig
+        ? await supabase.from('ai_configs').update(payload).eq('id', aiConfig.id)
+        : await supabase.from('ai_configs').insert({ ...payload, merchant_id: merchant.id });
+
+      // مهم جدًا: نتحقق من الخطأ ونعرضه، بدل ما نفترض النجاح دايمًا.
+      // قبل هيك، أي فشل بالحفظ (مثلاً عمود ناقص بقاعدة البيانات) كان يمرّ
+      // بصمت والواجهة تظهر "تم الحفظ" حتى لو ولا شي انحفظ فعليًا.
+      if (error) {
+        setSaveError(`فشل الحفظ: ${error.message}`);
+        return;
       }
+
       reload();
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -308,6 +317,12 @@ export function AiStudioPage() {
           </div>
         }
       />
+
+      {saveError && (
+        <div className="mb-4 flex items-center gap-2 rounded-xl bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+          <AlertCircle size={16} className="flex-shrink-0" /> {saveError}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 bg-slate-100 rounded-xl p-1 mb-6 overflow-x-auto">
