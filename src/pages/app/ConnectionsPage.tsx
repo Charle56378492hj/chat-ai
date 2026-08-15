@@ -294,26 +294,69 @@ function StepWaQr({ onClose, goToApi }: {
 // التوكن صحيح، محدا رح يوصله أي شي. هون منسجّل رابط دالة telegram-webhook
 // (المنشورة على Supabase) عند تيليغرام نفسه، ونمرر channel_id بالرابط حتى
 // تعرف الدالة لأي تاجر تعود الرسالة الجاية.
+//
+// إصلاحات مهمة مقارنة بالنسخة السابقة:
+//  • allowed_updates: بدونها ممكن تيليغرام ما يبعت أنواع تحديثات معيّنة
+//  • drop_pending_updates: نتجاهل الرسائل القديمة العالقة قبل الربط
+//  • secret_token: تيليغرام بيبعته بكل طلب فما حدا غريب يقدر يزوّر رسائل
+//  • نتحقق فعليًا عبر getWebhookInfo بعد التسجيل ونعرض الخطأ الحقيقي
+//  • نخزّن الرابط بعمود channels.webhook_url للتشخيص لاحقًا
 async function registerTelegramWebhook(
   botToken: string,
   channelId: string,
+  secret: string,
   toast: (msg: string, ok?: boolean) => void
-) {
-  if (!supabaseProjectUrl) return;
+): Promise<boolean> {
+  if (!supabaseProjectUrl) {
+    toast('⚠️ تم حفظ البوت لكن رابط المشروع غير مضبوط، فما تم تفعيل استقبال الرسائل.', false);
+    return false;
+  }
 
   const webhookUrl = `${supabaseProjectUrl}/functions/v1/telegram-webhook?channel_id=${channelId}`;
 
   try {
-    const res = await fetch(
-      `https://api.telegram.org/bot${botToken}/setWebhook?url=${encodeURIComponent(webhookUrl)}`
-    );
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: webhookUrl,
+        allowed_updates: ['message', 'edited_message'],
+        drop_pending_updates: true,
+        max_connections: 40,
+        ...(secret ? { secret_token: secret } : {}),
+      }),
+    });
     const data = await res.json().catch(() => null);
+
     if (!data?.ok) {
       toast(`⚠️ تم حفظ البوت لكن فشل تفعيل استقبال الرسائل: ${data?.description ?? 'خطأ غير معروف'}`, false);
+      return false;
     }
+
+    // نتأكد إن تيليغرام فعلاً مسجّل الرابط
+    const infoRes = await fetch(`https://api.telegram.org/bot${botToken}/getWebhookInfo`);
+    const info = await infoRes.json().catch(() => null);
+    const result = info?.result as { url?: string; last_error_message?: string } | undefined;
+
+    if (result?.url !== webhookUrl) {
+      toast('⚠️ لم يتم تأكيد تسجيل رابط استقبال الرسائل عند تيليغرام. جرّب "إعادة الربط".', false);
+      return false;
+    }
+
+    await supabase.from('channels').update({ webhook_url: webhookUrl }).eq('id', channelId);
+    return true;
   } catch {
     toast('⚠️ تم حفظ البوت لكن تعذّر تفعيل استقبال الرسائل من تيليغرام. حاول "إعادة الربط" لاحقًا.', false);
+    return false;
   }
+}
+
+// سر عشوائي لكل بوت — يُرسل لتيليغرام ويُخزّن بإعدادات القناة، والدالة
+// بتقارن بينهم قبل ما تعالج أي رسالة.
+function generateWebhookSecret(): string {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // ─── Step: Telegram Token ─────────────────────────────────────────────────────
@@ -349,7 +392,13 @@ function StepTgToken({ data, onClose, onSave }: {
   async function submit() {
     setSaving(true);
     await onSave(
-      { bot_token: token.trim(), method: 'token', bot_username: botInfo?.username ?? '' },
+      {
+        bot_token: token.trim(),
+        method: 'token',
+        bot_username: botInfo?.username ?? '',
+        // نحافظ على نفس السر لو كان موجود مسبقًا حتى ما نكسر ويبهوك مسجّل
+        webhook_secret: data.existingConfig?.webhook_secret || generateWebhookSecret(),
+      },
       botInfo ? `تيليغرام — @${botInfo.username}` : 'تيليغرام — Bot',
     );
     setSaving(false);
@@ -746,13 +795,23 @@ export function ConnectionsPage() {
 
       // تيليغرام تحديدًا محتاج خطوة إضافية: نسجّل رابط الويبهوك عند تيليغرام
       // نفسه (setWebhook)، وإلا رح توصل الرسائل ومحدا رح يعالجها أو يرد عليها.
+      let webhookReady = true;
       if (modal.channelType === 'telegram' && cfg.bot_token && channelId) {
-        await registerTelegramWebhook(cfg.bot_token, channelId, toast);
+        webhookReady = await registerTelegramWebhook(
+          cfg.bot_token,
+          channelId,
+          cfg.webhook_secret ?? '',
+          toast,
+        );
       }
 
       closeModal();
       reload();
-      toast(`✅ تم ربط ${nameOverride ?? modal.channelLabel} بنجاح`);
+      // ما منقول "تم بنجاح" إلا إذا استقبال الرسائل فعلاً اشتغل — قبل هيك
+      // كانت الرسالة تظهر خضراء حتى لو الويبهوك فشل والبوت أخرس.
+      if (webhookReady) {
+        toast(`✅ تم ربط ${nameOverride ?? modal.channelLabel} بنجاح`);
+      }
     } catch (e: unknown) {
       const errMsg = (e as { message?: string })?.message;
       // eslint-disable-next-line no-console
@@ -769,13 +828,57 @@ export function ConnectionsPage() {
     toast(`🔌 تم فصل ${name}`);
   }
 
+  // اختبار حقيقي بدل الانتظار الوهمي: لقنوات تيليغرام منسأل تيليغرام نفسه
+  // عن حالة البوت والويبهوك، وإذا الويبهوك مو مسجّل منعيد تسجيله فورًا.
   async function testChannel(id: string, name: string) {
     setTesting(id);
-    await new Promise((r) => setTimeout(r, 800));
-    await supabase.from('channels').update({ last_sync: new Date().toISOString() }).eq('id', id);
-    reload();
-    toast(`✅ اتصال ${name} يعمل بشكل طبيعي`);
-    setTesting(null);
+    try {
+      const channel = channels.find((c) => c.id === id);
+      const cfg = (channel?.config ?? {}) as Record<string, string>;
+
+      if (channel?.type === 'telegram' && cfg.bot_token) {
+        const meRes = await fetch(`https://api.telegram.org/bot${cfg.bot_token}/getMe`);
+        const me = await meRes.json().catch(() => null);
+        if (!me?.ok) {
+          toast(`❌ توكن ${name} لم يعد صالحًا. أعد الربط بتوكن جديد من @BotFather.`, false);
+          return;
+        }
+
+        const expected = supabaseProjectUrl
+          ? `${supabaseProjectUrl}/functions/v1/telegram-webhook?channel_id=${id}`
+          : '';
+        const infoRes = await fetch(`https://api.telegram.org/bot${cfg.bot_token}/getWebhookInfo`);
+        const info = await infoRes.json().catch(() => null);
+        const result = (info?.result ?? {}) as {
+          url?: string;
+          last_error_message?: string;
+          pending_update_count?: number;
+        };
+
+        if (!result.url || (expected && result.url !== expected)) {
+          const fixed = await registerTelegramWebhook(cfg.bot_token, id, cfg.webhook_secret ?? '', toast);
+          if (!fixed) return;
+          toast(`✅ تمت إعادة تفعيل استقبال الرسائل لـ ${name}`);
+        } else if (result.last_error_message) {
+          toast(`⚠️ تيليغرام يبلّغ عن خطأ بالتسليم: ${result.last_error_message}`, false);
+          return;
+        } else {
+          toast(`✅ ${name} متصل ويستقبل الرسائل بشكل طبيعي`);
+        }
+
+        await supabase.from('channels').update({ last_sync: new Date().toISOString() }).eq('id', id);
+        reload();
+        return;
+      }
+
+      await supabase.from('channels').update({ last_sync: new Date().toISOString() }).eq('id', id);
+      reload();
+      toast(`✅ اتصال ${name} يعمل بشكل طبيعي`);
+    } catch {
+      toast(`❌ تعذّر اختبار ${name}. تحقق من الاتصال بالإنترنت.`, false);
+    } finally {
+      setTesting(null);
+    }
   }
 
   const connected = channels.filter((c) => c.status === 'connected');
