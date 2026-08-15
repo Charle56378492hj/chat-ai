@@ -102,8 +102,10 @@ async function callChat(body: ChatBody): Promise<ProxyResult> {
   let res: Response;
   try {
     res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(reqBody) });
-  } catch {
-    return { error: 'تعذّر السيرفر من الاتصال بمزوّد الذكاء الاصطناعي. حاول مجددًا بعد قليل.' };
+  } catch (e) {
+    // مؤقتًا: نطلع تفاصيل الخطأ الحقيقي بدل رسالة عامة، حتى نعرف السبب بالضبط.
+    const detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    return { error: `فشل اتصال السيرفر بـ ${endpoint} — التفاصيل: ${detail}` };
   }
 
   const data = await res.json().catch(() => null);
@@ -166,8 +168,9 @@ async function callModels(body: ModelsBody): Promise<ProxyResult> {
     }
 
     return { error: `مزوّد غير معروف: ${provider}` };
-  } catch {
-    return { error: 'تعذّر السيرفر من الاتصال بمزوّد الذكاء الاصطناعي. حاول مجددًا بعد قليل.' };
+  } catch (e) {
+    const detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    return { error: `فشل اتصال السيرفر بمزوّد الموديلات — التفاصيل: ${detail}` };
   }
 }
 
@@ -187,9 +190,12 @@ serve(async (req: Request) => {
     return jsonResponse({ error: 'جسم الطلب غير صالح.' }, 400);
   }
 
+  // ملاحظة مهمة: نرجّع دايمًا HTTP 200 حتى لو في خطأ تطبيقي (مفتاح غلط، موديل غير موجود...).
+  // لأنو مكتبة supabase-js بتعتبر أي status غير 2xx "خطأ استدعاء" (invoke error) وبتخفي
+  // محتوى الـ body الحقيقي عن الواجهة الأمامية. فبنفرّق بين "خطأ بالمزوّد" (نحطه بحقل error
+  // جوا body مع status 200) و"عطل حقيقي بالدالة نفسها" (500 — قبل ما توصل لهون أصلًا).
   const result =
     parsed.action === 'models' ? await callModels(parsed) : await callChat(parsed as ChatBody);
 
-  const status = 'error' in result ? 400 : 200;
-  return jsonResponse(result, status);
+  return jsonResponse(result, 200);
 });
