@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS customers (
   city text,
   address text,
   channel text,
+  external_id text, -- معرّف العميل عند القناة (مثلاً chat id تبع تيليغرام)
   tags text[] DEFAULT '{}',
   vip boolean DEFAULT false,
   notes text,
@@ -179,6 +180,7 @@ CREATE TABLE IF NOT EXISTS ai_configs (
   ai_provider text DEFAULT 'openai',
   ai_model text DEFAULT 'gpt-4o-mini',
   api_key_name text,
+  api_key text, -- مفتاح مزوّد الذكاء الاصطناعي (تستخدمه دالة telegram-webhook للرد)
   system_prompt text,
   fallback_to_human boolean DEFAULT true,
   is_active boolean DEFAULT true,
@@ -395,3 +397,13 @@ CREATE INDEX IF NOT EXISTS idx_customer_portal_tokens_order ON customer_portal_t
 -- (See migration files for full policy definitions)
 -- Policies ensure each merchant can only access their own data.
 -- Owner + team members get access; audit_logs/api_keys/invoices are owner-only.
+
+
+-- ============ فهارس إصلاح ردود تيليغرام ============
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_customers_merchant_channel_external
+  ON customers (merchant_id, channel, external_id) WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_conversations_merchant_channel_customer
+  ON conversations (merchant_id, channel_id, customer_id)
+  WHERE channel_id IS NOT NULL AND customer_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
+  ON messages (conversation_id, created_at DESC);
