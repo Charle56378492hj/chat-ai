@@ -1,0 +1,20 @@
+# supabase/config.toml
+#
+# ⚠️ هذا الملف كان ناقص تمامًا — وهذا هو السبب الرئيسي لعدم رد البوت.
+#
+# افتراضيًا، Supabase ينشر أي Edge Function مع تفعيل التحقق من الـ JWT
+# (verify_jwt = true). تيليغرام لما يبعت رسالة على رابط الويبهوك، ما بيبعت
+# معه أي Authorization header — فـ Supabase كان يرفض الطلب بـ 401 Unauthorized
+# قبل ما يوصل حتى لكود الدالة. النتيجة: التوكن صحيح، والذكاء الاصطناعي محفوظ،
+# وبالرغم من هيك ما في ولا رد أبدًا.
+#
+# هون منطفّي التحقق للدوال العامة المقصود إنها تُستدعى من خارج التطبيق.
+# الحماية بتصير جوّا الدالة نفسها (channel_id + secret token).
+
+project_id = "chat-ai"
+
+[functions.telegram-webhook]
+verify_jwt = false
+
+[functions.ai-proxy]
+verify_jwt = false
