@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { useMerchantData } from '../../lib/hooks';
 import { useAuth } from '../../lib/auth';
-import { supabase } from '../../lib/supabase';
+import { supabase, supabaseProjectUrl } from '../../lib/supabase';
 import { PageHeader, Badge, Spinner } from '../../components/ui';
 import { CHANNEL_TYPES } from '../../lib/constants';
 import { formatDateTime } from '../../lib/format';
@@ -289,6 +289,33 @@ function StepWaQr({ onClose, goToApi }: {
   );
 }
 
+// ─── Register Telegram webhook ────────────────────────────────────────────────
+// بدون هاي الخطوة، تيليغرام ما بيعرف وين يبعت رسائل المستخدمين، فمهما كان
+// التوكن صحيح، محدا رح يوصله أي شي. هون منسجّل رابط دالة telegram-webhook
+// (المنشورة على Supabase) عند تيليغرام نفسه، ونمرر channel_id بالرابط حتى
+// تعرف الدالة لأي تاجر تعود الرسالة الجاية.
+async function registerTelegramWebhook(
+  botToken: string,
+  channelId: string,
+  toast: (msg: string, ok?: boolean) => void
+) {
+  if (!supabaseProjectUrl) return;
+
+  const webhookUrl = `${supabaseProjectUrl}/functions/v1/telegram-webhook?channel_id=${channelId}`;
+
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${botToken}/setWebhook?url=${encodeURIComponent(webhookUrl)}`
+    );
+    const data = await res.json().catch(() => null);
+    if (!data?.ok) {
+      toast(`⚠️ تم حفظ البوت لكن فشل تفعيل استقبال الرسائل: ${data?.description ?? 'خطأ غير معروف'}`, false);
+    }
+  } catch {
+    toast('⚠️ تم حفظ البوت لكن تعذّر تفعيل استقبال الرسائل من تيليغرام. حاول "إعادة الربط" لاحقًا.', false);
+  }
+}
+
 // ─── Step: Telegram Token ─────────────────────────────────────────────────────
 function StepTgToken({ data, onClose, onSave }: {
   data: ModalData;
@@ -367,10 +394,9 @@ function StepTgToken({ data, onClose, onSave }: {
           </div>
         )}
 
-        <CopyField
-          label="Webhook URL (معلومة)"
-          value={`${window.location.origin}/api/webhooks/telegram`}
-        />
+        <p className="text-xs text-slate-500">
+          سيتم تفعيل استقبال الرسائل تلقائيًا عند الضغط على "ربط البوت" — ما في داعي تعمل أي إعداد إضافي.
+        </p>
 
         <div className="flex gap-3 pt-2 border-t border-slate-100">
           <button type="button" onClick={onClose} className="btn-secondary flex-1">إلغاء</button>
@@ -697,6 +723,8 @@ export function ConnectionsPage() {
     const merchantId = freshMId as string;
 
     try {
+      let channelId = modal.existingId;
+
       if (modal.existingId) {
         const { error } = await supabase.from('channels')
           .update({ status: 'connected', config: cfg, last_sync: new Date().toISOString() })
@@ -704,16 +732,24 @@ export function ConnectionsPage() {
           .eq('merchant_id', merchantId);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from('channels').insert({
+        const { data: inserted, error } = await supabase.from('channels').insert({
           merchant_id: merchantId,
           type:        modal.channelType,
           name:        nameOverride ?? modal.channelLabel,
           status:      'connected',
           config:      cfg,
           last_sync:   new Date().toISOString(),
-        });
+        }).select('id').single();
         if (error) throw error;
+        channelId = inserted?.id;
       }
+
+      // تيليغرام تحديدًا محتاج خطوة إضافية: نسجّل رابط الويبهوك عند تيليغرام
+      // نفسه (setWebhook)، وإلا رح توصل الرسائل ومحدا رح يعالجها أو يرد عليها.
+      if (modal.channelType === 'telegram' && cfg.bot_token && channelId) {
+        await registerTelegramWebhook(cfg.bot_token, channelId, toast);
+      }
+
       closeModal();
       reload();
       toast(`✅ تم ربط ${nameOverride ?? modal.channelLabel} بنجاح`);
