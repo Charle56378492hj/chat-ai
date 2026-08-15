@@ -121,10 +121,15 @@ async function callAI(params: {
         'X-Title': 'رد آلي',
       };
       body = { model, messages, max_tokens: 300, temperature: 0.7 };
+    } else if (provider === 'google') {
+      // Google AI Studio (Gemini) — عبر الواجهة المتوافقة مع OpenAI
+      endpoint = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+      headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` };
+      body = { model, messages, max_tokens: 300, temperature: 0.7 };
     } else if (provider === 'huggingface') {
-      // api-inference.huggingface.co القديم توقف؛ المسار الحالي عبر router.huggingface.co
-      // بصيغة متوافقة مع OpenAI chat completions.
-      endpoint = `https://router.huggingface.co/hf-inference/models/${model}/v1/chat/completions`;
+      // نستخدم التوجيه التلقائي لمزوّدي Hugging Face (وليس hf-inference حصرًا)
+      // لأن أغلب موديلات المحادثة الكبيرة عادت غير مدعومة عبر hf-inference وحده.
+      endpoint = `https://router.huggingface.co/v1/chat/completions`;
       headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` };
       body = { model, messages, max_tokens: 300, temperature: 0.7 };
     } else {
@@ -163,6 +168,52 @@ async function callAI(params: {
   }
 }
 
+// ─── Fetch available models from provider using the entered API key ────────────
+async function fetchModelsForProvider(provider: string, apiKey: string): Promise<string[]> {
+  if (!apiKey.trim()) throw new Error('أدخل مفتاح API أولًا قبل جلب النماذج.');
+
+  if (provider === 'openai') {
+    const res = await fetch('https://api.openai.com/v1/models', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error?.message ?? `فشل الطلب (HTTP ${res.status})`);
+    const ids = ((data?.data ?? []) as { id: string }[]).map((m) => m.id);
+    return ids.filter((id) => /^(gpt|o[1-9])/i.test(id)).sort();
+  }
+
+  if (provider === 'openrouter') {
+    const res = await fetch('https://openrouter.ai/api/v1/models', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error?.message ?? `فشل الطلب (HTTP ${res.status})`);
+    const ids = ((data?.data ?? []) as { id: string }[]).map((m) => m.id);
+    return ids.sort();
+  }
+
+  if (provider === 'google') {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
+    );
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error?.message ?? `فشل الطلب (HTTP ${res.status})`);
+    const models = (data?.models ?? []) as { name: string; supportedGenerationMethods?: string[] }[];
+    return models
+      .filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
+      .map((m) => m.name.replace(/^models\//, ''))
+      .sort();
+  }
+
+  if (provider === 'huggingface') {
+    // Hugging Face لا يوفّر قائمة نماذج موحّدة بسيطة عبر التوجيه التلقائي؛
+    // يُكتب اسم الموديل يدويًا (مثال: meta-llama/Llama-3.1-8B-Instruct).
+    throw new Error('جلب النماذج تلقائيًا غير متاح لـ Hugging Face — اكتب اسم الموديل يدويًا في حقل النموذج.');
+  }
+
+  throw new Error(`مزوّد غير معروف: ${provider}`);
+}
+
 // ─── Main Component ────────────────────────────────────────────────────────────
 export function AiStudioPage() {
   const { aiConfig, loading, reload } = useMerchantData();
@@ -175,6 +226,9 @@ export function AiStudioPage() {
   const [testError, setTestError] = useState('');
   const [activeTab, setActiveTab] = useState<'personality' | 'training' | 'rules' | 'api_key' | 'test'>('personality');
   const [showApiKey, setShowApiKey] = useState(false);
+  const [fetchedModels, setFetchedModels] = useState<Record<string, string[]>>({});
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [fetchModelsError, setFetchModelsError] = useState('');
 
   const [config, setConfig] = useState({
     assistant_name: 'المساعد',
@@ -209,6 +263,22 @@ export function AiStudioPage() {
   }, [aiConfig]);
 
   const currentProvider = AI_PROVIDERS.find((p) => p.value === config.ai_provider);
+  const modelOptions = fetchedModels[config.ai_provider] ?? currentProvider?.models ?? [];
+
+  async function handleFetchModels() {
+    setFetchingModels(true);
+    setFetchModelsError('');
+    try {
+      const models = await fetchModelsForProvider(config.ai_provider, config.api_key);
+      if (models.length === 0) throw new Error('لم يتم العثور على أي نماذج متاحة بهذا المفتاح.');
+      setFetchedModels((prev) => ({ ...prev, [config.ai_provider]: models }));
+      setConfig((c) => ({ ...c, ai_model: models[0] }));
+    } catch (err: unknown) {
+      setFetchModelsError(err instanceof Error ? err.message : 'حدث خطأ أثناء جلب النماذج.');
+    } finally {
+      setFetchingModels(false);
+    }
+  }
 
   async function handleSave(e: FormEvent) {
     e.preventDefault();
@@ -391,7 +461,13 @@ export function AiStudioPage() {
               <div>
                 <label className="label">مزوّد AI</label>
                 <select className="input" value={config.ai_provider}
-                  onChange={(e) => setConfig({ ...config, ai_provider: e.target.value, ai_model: AI_PROVIDERS.find((p) => p.value === e.target.value)?.models[0] ?? '' })}>
+                  onChange={(e) => {
+                    const newProvider = e.target.value;
+                    const nextModel = fetchedModels[newProvider]?.[0]
+                      ?? AI_PROVIDERS.find((p) => p.value === newProvider)?.models[0]
+                      ?? '';
+                    setConfig({ ...config, ai_provider: newProvider, ai_model: nextModel });
+                  }}>
                   {AI_PROVIDERS.map((p) => (
                     <option key={p.value} value={p.value}>{p.label}</option>
                   ))}
@@ -401,7 +477,7 @@ export function AiStudioPage() {
                 <label className="label">النموذج</label>
                 <select className="input" value={config.ai_model}
                   onChange={(e) => setConfig({ ...config, ai_model: e.target.value })}>
-                  {currentProvider?.models.map((m) => (
+                  {modelOptions.map((m) => (
                     <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
@@ -497,7 +573,8 @@ export function AiStudioPage() {
                     className="input flex-1 font-mono text-sm"
                     placeholder={
                       config.ai_provider === 'openai' ? 'sk-...' :
-                      config.ai_provider === 'openrouter' ? 'sk-or-...' : 'hf_...'
+                      config.ai_provider === 'openrouter' ? 'sk-or-...' :
+                      config.ai_provider === 'google' ? 'AIzaSy...' : 'hf_...'
                     }
                     value={config.api_key}
                     onChange={(e) => setConfig({ ...config, api_key: e.target.value })}
@@ -527,6 +604,14 @@ export function AiStudioPage() {
                     <li>OpenRouter يوفر نماذج متعددة بسعر منافس</li>
                   </ol>
                 )}
+                {config.ai_provider === 'google' && (
+                  <ol className="text-sm text-sky-700 list-decimal list-inside space-y-1">
+                    <li>اذهب إلى <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="underline font-semibold">aistudio.google.com/apikey</a></li>
+                    <li>اضغط "Create API key"</li>
+                    <li>انسخ المفتاح وألصقه هنا</li>
+                    <li>بعد الإضافة، اضغط "جلب النماذج المتاحة" تحت لتشوف كل موديلات Gemini المتاحة لمفتاحك</li>
+                  </ol>
+                )}
                 {config.ai_provider === 'huggingface' && (
                   <ol className="text-sm text-sky-700 list-decimal list-inside space-y-1">
                     <li>اذهب إلى <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer" className="underline font-semibold">huggingface.co/settings/tokens</a></li>
@@ -535,6 +620,35 @@ export function AiStudioPage() {
                   </ol>
                 )}
               </div>
+
+              {config.api_key && (
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    className="btn-secondary w-full"
+                    disabled={fetchingModels}
+                    onClick={handleFetchModels}
+                  >
+                    {fetchingModels ? <Spinner size="sm" /> : <><RefreshCw size={15} /> جلب النماذج المتاحة</>}
+                  </button>
+                  {fetchModelsError && (
+                    <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                      {fetchModelsError}
+                    </div>
+                  )}
+                  {fetchedModels[config.ai_provider] && !fetchModelsError && (
+                    <div className="text-xs text-slate-500">
+                      تم العثور على {fetchedModels[config.ai_provider].length} نموذج. النموذج الحالي:
+                      <select className="input mt-1" value={config.ai_model}
+                        onChange={(e) => setConfig({ ...config, ai_model: e.target.value })}>
+                        {fetchedModels[config.ai_provider].map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {config.api_key && (
                 <button
