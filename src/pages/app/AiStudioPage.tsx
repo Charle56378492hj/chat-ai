@@ -122,25 +122,41 @@ async function callAI(params: {
       };
       body = { model, messages, max_tokens: 300, temperature: 0.7 };
     } else if (provider === 'huggingface') {
-      endpoint = `https://api-inference.huggingface.co/models/${model}`;
+      // api-inference.huggingface.co القديم توقف؛ المسار الحالي عبر router.huggingface.co
+      // بصيغة متوافقة مع OpenAI chat completions.
+      endpoint = `https://router.huggingface.co/hf-inference/models/${model}/v1/chat/completions`;
       headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` };
-      body = { inputs: `${systemPrompt}\n\nUser: ${userMessage}\nAssistant:`, parameters: { max_new_tokens: 300, temperature: 0.7 } };
-      const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
-      const data = await res.json();
-      if (Array.isArray(data) && data[0]?.generated_text) {
-        const full = data[0].generated_text as string;
-        const parts = full.split('Assistant:');
-        return parts[parts.length - 1].trim();
-      }
-      throw new Error(data.error ?? 'HuggingFace error');
+      body = { model, messages, max_tokens: 300, temperature: 0.7 };
     } else {
       throw new Error(`مزوّد غير معروف: ${provider}`);
     }
 
-    const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message ?? data.error);
-    return (data.choices?.[0]?.message?.content as string | undefined) ?? 'لم أحصل على رد من المزوّد.';
+    let res: Response;
+    try {
+      res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
+    } catch {
+      // فشل الاتصال نفسه (شبكة/CORS/انقطاع) قبل ما يوصل رد من السيرفر
+      throw new Error('تعذّر الاتصال بمزوّد الذكاء الاصطناعي. تأكد من اتصال الإنترنت، ومن صحة رابط الـ API، ومن عدم وجود حجب CORS من طرف المزوّد.');
+    }
+
+    const data = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      const apiMsg =
+        (data && typeof data === 'object' && 'error' in data
+          ? (typeof (data as { error: unknown }).error === 'string'
+              ? (data as { error: string }).error
+              : (data as { error?: { message?: string } }).error?.message)
+          : null) ?? `فشل الطلب (HTTP ${res.status})`;
+      throw new Error(apiMsg);
+    }
+
+    if (data && typeof data === 'object' && 'error' in data && (data as { error?: unknown }).error) {
+      const errVal = (data as { error: unknown }).error;
+      throw new Error(typeof errVal === 'string' ? errVal : (errVal as { message?: string })?.message ?? 'خطأ من المزوّد');
+    }
+
+    return (data?.choices?.[0]?.message?.content as string | undefined) ?? 'لم أحصل على رد من المزوّد.';
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'خطأ غير متوقع';
     throw new Error(msg);
