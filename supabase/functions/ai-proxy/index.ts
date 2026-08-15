@@ -88,7 +88,9 @@ async function callChat(body: ChatBody): Promise<ProxyResult> {
     endpoint = 'https://openrouter.ai/api/v1/chat/completions';
     headers.Authorization = `Bearer ${apiKey}`;
     headers['HTTP-Referer'] = 'https://supabase.co';
-    headers['X-Title'] = 'رد آلي';
+    // ملاحظة: هيدرز HTTP لازم تكون ASCII بس (ByteString) — نص عربي هون كان يكسر fetch فورًا
+    // بخطأ "not a valid ByteString"، وهذا كان السبب الحقيقي وراء فشل الاتصال بالكامل.
+    headers['X-Title'] = 'Auto Reply Bot';
   } else if (provider === 'google') {
     endpoint = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
     headers.Authorization = `Bearer ${apiKey}`;
@@ -102,10 +104,8 @@ async function callChat(body: ChatBody): Promise<ProxyResult> {
   let res: Response;
   try {
     res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(reqBody) });
-  } catch (e) {
-    // مؤقتًا: نطلع تفاصيل الخطأ الحقيقي بدل رسالة عامة، حتى نعرف السبب بالضبط.
-    const detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-    return { error: `فشل اتصال السيرفر بـ ${endpoint} — التفاصيل: ${detail}` };
+  } catch {
+    return { error: 'تعذّر السيرفر من الاتصال بمزوّد الذكاء الاصطناعي. حاول مجددًا بعد قليل.' };
   }
 
   const data = await res.json().catch(() => null);
@@ -168,9 +168,8 @@ async function callModels(body: ModelsBody): Promise<ProxyResult> {
     }
 
     return { error: `مزوّد غير معروف: ${provider}` };
-  } catch (e) {
-    const detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-    return { error: `فشل اتصال السيرفر بمزوّد الموديلات — التفاصيل: ${detail}` };
+  } catch {
+    return { error: 'تعذّر السيرفر من الاتصال بمزوّد الذكاء الاصطناعي. حاول مجددًا بعد قليل.' };
   }
 }
 
