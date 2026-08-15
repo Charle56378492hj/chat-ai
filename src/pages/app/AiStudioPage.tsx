@@ -98,120 +98,40 @@ async function callAI(params: {
       : `أهلًا بك! شكرًا لتواصلك معنا 😊 سأكون سعيدًا بمساعدتك. هل يمكنك إخباري بمزيد من التفاصيل عن استفسارك؟`;
   }
 
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userMessage },
-  ];
+  // بدل ما نستدعي مزوّد الذكاء الاصطناعي مباشرة من المتصفح (وهيك يفشل إذا كان
+  // اتصال المستخدم بهذا المزوّد محجوب)، نبعت الطلب لدالة Edge Function على
+  // Supabase (ai-proxy) وهي يلي بتتواصل مع المزوّد من جهتها وترجّع الرد.
+  const { data, error } = await supabase.functions.invoke('ai-proxy', {
+    body: { action: 'chat', provider, apiKey, model, systemPrompt, userMessage },
+  });
 
-  try {
-    let endpoint = '';
-    let headers: Record<string, string> = {};
-    let body: object = {};
-
-    if (provider === 'openai') {
-      endpoint = 'https://api.openai.com/v1/chat/completions';
-      headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` };
-      body = { model, messages, max_tokens: 300, temperature: 0.7 };
-    } else if (provider === 'openrouter') {
-      endpoint = 'https://openrouter.ai/api/v1/chat/completions';
-      headers = {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-        'HTTP-Referer': window.location.origin,
-        'X-Title': 'رد آلي',
-      };
-      body = { model, messages, max_tokens: 300, temperature: 0.7 };
-    } else if (provider === 'google') {
-      // Google AI Studio (Gemini) — عبر الواجهة المتوافقة مع OpenAI
-      endpoint = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
-      headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` };
-      body = { model, messages, max_tokens: 300, temperature: 0.7 };
-    } else if (provider === 'huggingface') {
-      // نستخدم التوجيه التلقائي لمزوّدي Hugging Face (وليس hf-inference حصرًا)
-      // لأن أغلب موديلات المحادثة الكبيرة عادت غير مدعومة عبر hf-inference وحده.
-      endpoint = `https://router.huggingface.co/v1/chat/completions`;
-      headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` };
-      body = { model, messages, max_tokens: 300, temperature: 0.7 };
-    } else {
-      throw new Error(`مزوّد غير معروف: ${provider}`);
-    }
-
-    let res: Response;
-    try {
-      res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
-    } catch {
-      // فشل الاتصال نفسه (شبكة/CORS/انقطاع) قبل ما يوصل رد من السيرفر
-      throw new Error('تعذّر الاتصال بمزوّد الذكاء الاصطناعي. تأكد من اتصال الإنترنت، ومن صحة رابط الـ API، ومن عدم وجود حجب CORS من طرف المزوّد.');
-    }
-
-    const data = await res.json().catch(() => null);
-
-    if (!res.ok) {
-      const apiMsg =
-        (data && typeof data === 'object' && 'error' in data
-          ? (typeof (data as { error: unknown }).error === 'string'
-              ? (data as { error: string }).error
-              : (data as { error?: { message?: string } }).error?.message)
-          : null) ?? `فشل الطلب (HTTP ${res.status})`;
-      throw new Error(apiMsg);
-    }
-
-    if (data && typeof data === 'object' && 'error' in data && (data as { error?: unknown }).error) {
-      const errVal = (data as { error: unknown }).error;
-      throw new Error(typeof errVal === 'string' ? errVal : (errVal as { message?: string })?.message ?? 'خطأ من المزوّد');
-    }
-
-    return (data?.choices?.[0]?.message?.content as string | undefined) ?? 'لم أحصل على رد من المزوّد.';
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'خطأ غير متوقع';
-    throw new Error(msg);
+  if (error) {
+    throw new Error('تعذّر الاتصال بدالة الذكاء الاصطناعي (ai-proxy). تأكد إنها منشورة على Supabase.');
   }
+  if (data?.error) {
+    throw new Error(data.error as string);
+  }
+
+  return (data?.content as string | undefined) ?? 'لم أحصل على رد من المزوّد.';
 }
 
 // ─── Fetch available models from provider using the entered API key ────────────
 async function fetchModelsForProvider(provider: string, apiKey: string): Promise<string[]> {
   if (!apiKey.trim()) throw new Error('أدخل مفتاح API أولًا قبل جلب النماذج.');
 
-  if (provider === 'openai') {
-    const res = await fetch('https://api.openai.com/v1/models', {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(data?.error?.message ?? `فشل الطلب (HTTP ${res.status})`);
-    const ids = ((data?.data ?? []) as { id: string }[]).map((m) => m.id);
-    return ids.filter((id) => /^(gpt|o[1-9])/i.test(id)).sort();
+  // نفس مبدأ callAI: الطلب يمر عبر دالة ai-proxy على Supabase بدل المتصفح مباشرة.
+  const { data, error } = await supabase.functions.invoke('ai-proxy', {
+    body: { action: 'models', provider, apiKey },
+  });
+
+  if (error) {
+    throw new Error('تعذّر الاتصال بدالة الذكاء الاصطناعي (ai-proxy). تأكد إنها منشورة على Supabase.');
+  }
+  if (data?.error) {
+    throw new Error(data.error as string);
   }
 
-  if (provider === 'openrouter') {
-    const res = await fetch('https://openrouter.ai/api/v1/models', {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(data?.error?.message ?? `فشل الطلب (HTTP ${res.status})`);
-    const ids = ((data?.data ?? []) as { id: string }[]).map((m) => m.id);
-    return ids.sort();
-  }
-
-  if (provider === 'google') {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
-    );
-    const data = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(data?.error?.message ?? `فشل الطلب (HTTP ${res.status})`);
-    const models = (data?.models ?? []) as { name: string; supportedGenerationMethods?: string[] }[];
-    return models
-      .filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
-      .map((m) => m.name.replace(/^models\//, ''))
-      .sort();
-  }
-
-  if (provider === 'huggingface') {
-    // Hugging Face لا يوفّر قائمة نماذج موحّدة بسيطة عبر التوجيه التلقائي؛
-    // يُكتب اسم الموديل يدويًا (مثال: meta-llama/Llama-3.1-8B-Instruct).
-    throw new Error('جلب النماذج تلقائيًا غير متاح لـ Hugging Face — اكتب اسم الموديل يدويًا في حقل النموذج.');
-  }
-
-  throw new Error(`مزوّد غير معروف: ${provider}`);
+  return (data?.models as string[] | undefined) ?? [];
 }
 
 // ─── Main Component ────────────────────────────────────────────────────────────
