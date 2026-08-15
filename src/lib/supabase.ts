@@ -24,3 +24,7 @@ export const supabase = createClient(
 );
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+
+// نصدّر رابط المشروع أيضًا حتى نقدر نبني رابط الـ Edge Functions (متل telegram-webhook)
+// من مكان واحد بدل ما نكرره بكل صفحة.
+export const supabaseProjectUrl = supabaseUrl;
