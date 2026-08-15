@@ -106,13 +106,38 @@ async function callAI(params: {
   });
 
   if (error) {
-    throw new Error('تعذّر الاتصال بدالة الذكاء الاصطناعي (ai-proxy). تأكد إنها منشورة على Supabase.');
+    throw new Error(await describeInvokeError(error));
   }
   if (data?.error) {
     throw new Error(data.error as string);
   }
 
   return (data?.content as string | undefined) ?? 'لم أحصل على رد من المزوّد.';
+}
+
+// ─── يحاول يطلع رسالة الخطأ الحقيقية من استجابة الدالة (بدل رسالة عامة) ─────────
+async function describeInvokeError(error: unknown): Promise<string> {
+  const withContext = error as { message?: string; context?: Response };
+  const ctx = withContext?.context;
+
+  if (ctx && typeof ctx.text === 'function') {
+    try {
+      const raw = await ctx.text();
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed?.error) return String(parsed.error);
+      } catch {
+        // مش JSON، خلي الرسالة الخام إذا في شي مفيد فيها
+      }
+      if (raw) return `فشل استدعاء ai-proxy (HTTP ${ctx.status}): ${raw.slice(0, 300)}`;
+      return `فشل استدعاء ai-proxy (HTTP ${ctx.status}).`;
+    } catch {
+      // تجاهل، رح نرجع بالأسفل
+    }
+  }
+
+  const baseMsg = withContext?.message ?? 'تعذّر الاتصال بدالة الذكاء الاصطناعي (ai-proxy).';
+  return `${baseMsg} تأكد إنها منشورة على Supabase وإنها ما بترمي خطأ 500 (تحقق من Logs بلوحة Supabase تحت Edge Functions).`;
 }
 
 // ─── Fetch available models from provider using the entered API key ────────────
@@ -125,7 +150,7 @@ async function fetchModelsForProvider(provider: string, apiKey: string): Promise
   });
 
   if (error) {
-    throw new Error('تعذّر الاتصال بدالة الذكاء الاصطناعي (ai-proxy). تأكد إنها منشورة على Supabase.');
+    throw new Error(await describeInvokeError(error));
   }
   if (data?.error) {
     throw new Error(data.error as string);
