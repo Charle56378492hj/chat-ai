@@ -18,3 +18,8 @@ verify_jwt = false
 
 [functions.ai-proxy]
 verify_jwt = false
+
+# بوابة واتساب (Baileys) سيرفر خارجي، ما بيبعت JWT.
+# الحماية جوّا الدالة: هيدر x-gateway-secret + التحقق من القناة.
+[functions.whatsapp-inbound]
+verify_jwt = false
