@@ -1,10 +1,14 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useMerchantData } from '../../lib/hooks';
 import { useAuth } from '../../lib/auth';
 import { supabase, supabaseProjectUrl } from '../../lib/supabase';
 import { PageHeader, Badge, Spinner } from '../../components/ui';
 import { CHANNEL_TYPES } from '../../lib/constants';
 import { formatDateTime } from '../../lib/format';
+import {
+  isWhatsAppGatewayConfigured, startWhatsAppSession, getWhatsAppStatus,
+  WA_STATUS_LABEL, type WaSnapshot,
+} from '../../lib/whatsappGateway';
 import {
   MessageCircle, Facebook, Instagram, Send, Globe, Smartphone, Mail, Music,
   ShoppingBag, Search, RefreshCw, Plug, Trash2, Check, X,
@@ -251,43 +255,129 @@ function StepWaApi({ data, onClose, onSave }: {
   );
 }
 
-// ─── Step: WhatsApp QR ────────────────────────────────────────────────────────
-function StepWaQr({ onClose, goToApi }: {
+// ─── Step: WhatsApp QR (بوابة Baileys الحقيقية) ───────────────────────────────
+// المنطق: نضمن وجود سجل قناة → نطلب من البوابة بدء الجلسة → نستطلع الحالة كل
+// ثانيتين ونعرض QR حقيقي مولّد من بروتوكول واتساب. أول ما يصير connected،
+// البوابة نفسها بتحدّث حالة القناة بقاعدة البيانات ومنسكّر النافذة.
+function StepWaQr({ onClose, goToApi, ensureChannel, onConnected, toast }: {
   onClose: () => void;
   goToApi: () => void;
+  ensureChannel: () => Promise<string>;
+  onConnected: () => void;
+  toast: (msg: string, ok?: boolean) => void;
 }) {
+  const [snap, setSnap]       = useState<WaSnapshot | null>(null);
+  const [error, setError]     = useState<string | null>(null);
+  const [starting, setStart]  = useState(false);
+  const channelIdRef = useRef<string | null>(null);
+  const configured = isWhatsAppGatewayConfigured();
+
+  const begin = useCallback(async (forceNewQr: boolean) => {
+    setError(null);
+    setStart(true);
+    try {
+      const id = channelIdRef.current ?? (await ensureChannel());
+      channelIdRef.current = id;
+      setSnap(await startWhatsAppSession(id, forceNewQr));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذّر بدء الجلسة');
+    } finally {
+      setStart(false);
+    }
+  }, [ensureChannel]);
+
+  // بدء تلقائي عند فتح النافذة
+  useEffect(() => { if (configured) void begin(false); }, [configured, begin]);
+
+  // استطلاع الحالة — يتوقف تلقائيًا عند الاتصال أو إغلاق النافذة
+  useEffect(() => {
+    if (!configured) return;
+    let alive = true;
+    const timer = setInterval(async () => {
+      const id = channelIdRef.current;
+      if (!id || !alive) return;
+      const s = await getWhatsAppStatus(id);
+      if (!alive) return;
+      setSnap(s);
+      if (s.status === 'connected') {
+        clearInterval(timer);
+        toast(`تم ربط واتساب بنجاح${s.phone ? ` (${s.phone})` : ''} ✅`);
+        onConnected();
+        onClose();
+      }
+    }, 2000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [configured, onClose, onConnected, toast]);
+
+  if (!configured) {
+    return (
+      <Modal title="واتساب — QR Code" onClose={onClose}>
+        <div className="space-y-5">
+          <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800 leading-relaxed">
+            <div className="font-bold mb-2">⚠️ خادم واتساب غير مضبوط</div>
+            الربط عبر QR يحتاج خادم البوابة (مجلد <code>whatsapp-server</code>) قيد التشغيل.
+            شغّله ثم أضف رابطه في <code>VITE_WHATSAPP_GATEWAY_URL</code> وأعد بناء التطبيق.
+          </div>
+          <button type="button" onClick={goToApi} className="btn-secondary w-full">
+            <Key size={16} /> استخدام Cloud API بدلاً من ذلك
+          </button>
+          <button type="button" onClick={onClose} className="btn-secondary w-full">إغلاق</button>
+        </div>
+      </Modal>
+    );
+  }
+
+  const status = snap?.status ?? 'connecting';
+
   return (
-    <Modal title="واتساب — QR Code" onClose={onClose}>
+    <Modal title="واتساب — ربط عبر QR" onClose={onClose}>
       <div className="space-y-5">
-        <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
-          <div className="font-bold mb-2">⚠️ ربط واتساب عبر QR</div>
-          <p className="leading-relaxed">
-            ربط واتساب عبر مسح QR يتطلب خادمًا خاصًا يعمل ببروتوكول واتساب الداخلي.
-            هذه الميزة غير متوفرة حاليًا في النظام.
-          </p>
-          <p className="mt-2 leading-relaxed">
-            البديل المدعوم والرسمي هو <strong>WhatsApp Cloud API</strong> من Meta —
-            وهو آمن وموثوق ويعمل بشكل كامل من خلال هذا النظام.
+        <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 flex flex-col items-center gap-3">
+          {snap?.qr_image ? (
+            <img src={snap.qr_image} alt="QR واتساب" width={240} height={240} className="rounded-xl bg-white p-2" />
+          ) : (
+            <div className="h-[240px] w-[240px] flex flex-col items-center justify-center gap-3 text-slate-500 text-sm">
+              <Spinner />
+              {status === 'connected' ? 'تم الاتصال…' : 'جارٍ توليد الرمز…'}
+            </div>
+          )}
+          <div className="text-sm font-semibold text-slate-700">{WA_STATUS_LABEL[status]}</div>
+          {snap?.phone && <div className="text-xs text-slate-500 font-mono">{snap.phone}</div>}
+        </div>
+
+        <div className="rounded-xl bg-sky-50 border border-sky-200 p-4 text-sm text-sky-800">
+          <div className="font-bold mb-2">📱 خطوات المسح:</div>
+          <ol className="list-decimal list-inside space-y-1 leading-relaxed">
+            <li>افتح واتساب على هاتفك</li>
+            <li>الإعدادات ← <strong>الأجهزة المرتبطة</strong></li>
+            <li>اضغط <strong>ربط جهاز</strong> ووجّه الكاميرا للرمز</li>
+          </ol>
+          <p className="mt-2 text-xs text-sky-700">
+            الرمز صالح لدقيقة تقريبًا ويتجدّد تلقائيًا. بعد الربط تبقى الجلسة محفوظة
+            ولن تحتاج للمسح مرة أخرى حتى لو أُعيد تشغيل الخادم.
           </p>
         </div>
 
-        <div className="rounded-xl bg-sky-50 border border-sky-200 p-4">
-          <div className="font-bold text-sky-800 mb-2 text-sm">📋 ما تحتاجه لـ Cloud API:</div>
-          <ul className="list-disc list-inside space-y-1 text-sm text-sky-700">
-            <li>حساب Meta for Developers (مجاني)</li>
-            <li>رقم هاتف مفعّل على WhatsApp Business</li>
-            <li>Phone Number ID و Access Token</li>
-          </ul>
-        </div>
+        {(error || snap?.last_error) && (
+          <div className="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">
+            {error ?? snap?.last_error}
+          </div>
+        )}
 
-        <button type="button" onClick={goToApi} className="btn-primary w-full">
-          <Key size={16} /> الانتقال إلى Cloud API
+        <div className="flex gap-3">
+          <button type="button" onClick={() => void begin(true)} disabled={starting} className="btn-secondary flex-1">
+            {starting ? <Spinner size="sm" /> : <><RefreshCw size={16} /> رمز جديد</>}
+          </button>
+          <button type="button" onClick={onClose} className="btn-secondary flex-1">إغلاق</button>
+        </div>
+        <button type="button" onClick={goToApi} className="w-full text-xs text-slate-500 hover:text-slate-700 underline">
+          أو استخدم WhatsApp Cloud API الرسمي
         </button>
-        <button type="button" onClick={onClose} className="btn-secondary w-full">إلغاء</button>
       </div>
     </Modal>
   );
 }
+
 
 // ─── Register Telegram webhook ────────────────────────────────────────────────
 // بدون هاي الخطوة، تيليغرام ما بيعرف وين يبعت رسائل المستخدمين، فمهما كان
@@ -758,6 +848,27 @@ export function ConnectionsPage() {
 
   function closeModal() { setModal(null); }
 
+  // ينشئ (أو يعيد) سجل قناة واتساب قبل بدء جلسة QR — البوابة بتحتاج channel_id.
+  async function ensureWaChannel(): Promise<string> {
+    const existing = channels.find((c) => c.type === 'whatsapp');
+    if (existing) return existing.id;
+
+    const { data: mId, error: rpcErr } = await supabase.rpc('get_or_create_merchant');
+    if (rpcErr || !mId) throw new Error('تعذّر تحديد المتجر. أعد تسجيل الدخول وحاول مجددًا.');
+
+    const { data: inserted, error } = await supabase.from('channels').insert({
+      merchant_id: mId as string,
+      type: 'whatsapp',
+      name: 'واتساب',
+      status: 'pending',
+      config: { method: 'qr' },
+    }).select('id').single();
+    if (error || !inserted) throw new Error(error?.message ?? 'تعذّر إنشاء القناة');
+    reload();
+    return inserted.id as string;
+  }
+
+
   async function saveChannel(cfg: Record<string, string>, nameOverride?: string) {
     if (!user || !modal) { toast('يرجى تسجيل الدخول أولاً', false); return; }
 
@@ -890,7 +1001,8 @@ export function ConnectionsPage() {
 
     if (step === 'choose')    return <StepChoose   data={modal} goTo={goTo} onClose={closeModal} />;
     if (step === 'wa_api')    return <StepWaApi    data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
-    if (step === 'wa_qr')     return <StepWaQr     onClose={closeModal} goToApi={() => goTo('wa_api')} />;
+    if (step === 'wa_qr')     return <StepWaQr     onClose={closeModal} goToApi={() => goTo('wa_api')}
+                                                  ensureChannel={ensureWaChannel} onConnected={reload} toast={toast} />;
     if (step === 'tg_token')  return <StepTgToken  data={modal} onClose={closeModal} onSave={(cfg, lbl) => saveChannel(cfg, lbl)} />;
     if (step === 'tg_qr')     return <StepTgQr     onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
     if (step === 'oauth')     return <StepOAuth    data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
