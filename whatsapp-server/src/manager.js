@@ -109,6 +109,14 @@ export async function startSession(channelId, options = {}) {
     session = emptySession(channelId, options.merchantId ?? null);
     sessions.set(channelId, session);
   }
+  // طلب صريح لجلسة/QR جديد (زر "توليد رمز جديد" أو أول محاولة بعد توقف
+  // سابق) لازم يصفّر عدّادات المحاولات القديمة، وإلا ضلينا نرجع فورًا لرسالة
+  // "انتهت المهلة" القديمة حتى لو المستخدم لسا ما شاف QR واحد بالجلسة الجديدة.
+  if (session.stopped || options.forceNewQr) {
+    session.qrAttempts = 0;
+    session.reconnectAttempts = 0;
+    session.lastError = null;
+  }
   session.stopped = false;
   if (options.merchantId) session.merchantId = options.merchantId;
 
