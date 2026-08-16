@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 WORKDIR /app
 
 # baileys يحتاج بعض أدوات النظام لفك تشفير/معالجة الوسائط
