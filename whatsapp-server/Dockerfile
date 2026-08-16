@@ -3,7 +3,7 @@ WORKDIR /app
 
 # baileys يحتاج بعض أدوات النظام لفك تشفير/معالجة الوسائط
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+  && apt-get install -y --no-install-recommends ca-certificates ffmpeg git \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json ./
