@@ -10,10 +10,13 @@ import {
   WA_STATUS_LABEL, type WaSnapshot,
 } from '../../lib/whatsappGateway';
 import {
+  isFacebookLoginConfigured, facebookLogin, fetchManagedPages, type FbPage,
+} from '../../lib/facebookAuth';
+import {
   MessageCircle, Facebook, Instagram, Send, Globe, Smartphone, Mail, Music,
   ShoppingBag, Search, RefreshCw, Plug, Trash2, Check, X,
   Activity, ExternalLink, Zap, QrCode, Key, Bot, Copy,
-  CheckCircle, ArrowRight, Shield, Settings, Wifi,
+  CheckCircle, ArrowRight, Shield, Settings, Wifi, Sparkles, LogIn,
 } from 'lucide-react';
 
 // ─── Icon map ────────────────────────────────────────────────────────────────
@@ -49,6 +52,7 @@ type ModalStep =
   | 'choose'
   | 'wa_api' | 'wa_qr'
   | 'tg_token' | 'tg_qr'
+  | 'fb_choose' | 'fb_login'
   | 'oauth'
   | 'generic'
   | 'widget';
@@ -608,7 +612,238 @@ function StepTgQr({ onClose, onSave }: {
   );
 }
 
-// ─── Step: OAuth (Facebook / Instagram / Messenger) ───────────────────────────
+// ─── Step: اختيار طريقة ربط فيسبوك/إنستغرام ────────────────────────────────────
+// خيارين: تسجيل دخول تلقائي بضغطة واحدة (الأسهل، موصى به) أو الطريقة اليدوية
+// القديمة (نسخ Page ID وAccess Token من Meta for Developers) لمن يفضّلها.
+function StepFbChoose({ data, goTo, onClose }: {
+  data: ModalData;
+  goTo: (s: ModalStep) => void;
+  onClose: () => void;
+}) {
+  const isIg = data.channelType === 'instagram';
+
+  return (
+    <Modal title={`ربط ${data.channelLabel}`} onClose={onClose}>
+      <p className="text-sm text-slate-500 mb-5 text-center">اختر طريقة الربط</p>
+      <div className="space-y-3">
+        {/* الطريقة الأسهل: تسجيل دخول تلقائي */}
+        <button
+          type="button"
+          onClick={() => goTo('fb_login')}
+          className="w-full flex items-center gap-4 p-4 rounded-2xl border-2 border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-all text-right group"
+        >
+          <div className="h-12 w-12 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600 group-hover:bg-blue-500 group-hover:text-white transition-colors flex-shrink-0">
+            <LogIn size={22} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="font-bold text-slate-900">تسجيل الدخول التلقائي</div>
+            <div className="text-sm text-slate-500 mt-0.5">
+              {isIg
+                ? 'سجّل دخولك بحساب فيسبوك المرتبط بصفحتك وسيتم ربط إنستغرام تلقائيًا'
+                : 'سجّل دخولك بحساب فيسبوك واختر صفحتك، وسيتم كل شيء تلقائيًا'}
+            </div>
+            <span className="inline-flex items-center gap-1 text-xs text-blue-600 font-semibold mt-1">
+              <Sparkles size={11} /> الأسهل والأسرع — موصى به
+            </span>
+          </div>
+          <ArrowRight size={18} className="text-slate-300 group-hover:text-blue-500 flex-shrink-0" />
+        </button>
+
+        {/* الطريقة اليدوية القديمة */}
+        <button
+          type="button"
+          onClick={() => goTo('oauth')}
+          className="w-full flex items-center gap-4 p-4 rounded-2xl border-2 border-slate-200 hover:border-slate-400 hover:bg-slate-50 transition-all text-right group"
+        >
+          <div className="h-12 w-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-600 group-hover:bg-slate-500 group-hover:text-white transition-colors flex-shrink-0">
+            <Key size={22} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="font-bold text-slate-900">الطريقة اليدوية</div>
+            <div className="text-sm text-slate-500 mt-0.5">
+              أدخل Page ID وAccess Token يدويًا من Meta for Developers
+            </div>
+            <span className="text-xs text-slate-400 mt-1 inline-block">للمستخدمين المتقدمين</span>
+          </div>
+          <ArrowRight size={18} className="text-slate-300 group-hover:text-slate-500 flex-shrink-0" />
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Step: تسجيل دخول فيسبوك التلقائي ───────────────────────────────────────────
+// يفتح نافذة Facebook Login الرسمية، يجيب صفحات التاجر، وبعد اختيار الصفحة
+// يستدعي دالة facebook-connect (سيرفر-سايد) اللي بتبدّل التوكن وتفعّل استقبال
+// الرسائل تلقائيًا — كل هذا بدون ما التاجر يلمس Meta for Developers أبدًا.
+function StepFbLogin({ data, onClose, onSave, goToManual }: {
+  data: ModalData;
+  onClose: () => void;
+  onSave: (cfg: Record<string, string>) => Promise<void>;
+  goToManual: () => void;
+}) {
+  const isIg = data.channelType === 'instagram';
+  const [phase, setPhase] = useState<'start' | 'choosing' | 'finishing' | 'done'>('start');
+  const [error, setError] = useState<string | null>(null);
+  const [pages, setPages] = useState<FbPage[]>([]);
+  const [pageName, setPageName] = useState('');
+  const userTokenRef = useRef<string | null>(null);
+  const configured = isFacebookLoginConfigured();
+
+  async function startLogin() {
+    setError(null);
+    try {
+      const { accessToken } = await facebookLogin();
+      userTokenRef.current = accessToken;
+      const list = await fetchManagedPages(accessToken);
+      if (list.length === 0) {
+        setError('حسابك لا يدير أي صفحة فيسبوك. أنشئ صفحة فيسبوك لعملك أولًا ثم أعد المحاولة.');
+        return;
+      }
+      if (list.length === 1) {
+        await finishConnect(list[0]);
+        return;
+      }
+      setPages(list);
+      setPhase('choosing');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذّر تسجيل الدخول عبر فيسبوك');
+    }
+  }
+
+  async function finishConnect(page: FbPage) {
+    setPhase('finishing');
+    setError(null);
+    try {
+      const token = userTokenRef.current;
+      if (!token) throw new Error('انتهت جلسة تسجيل الدخول. حاول من جديد.');
+
+      const { data: result, error: fnError } = await supabase.functions.invoke('facebook-connect', {
+        body: { user_access_token: token, page_id: page.id, channel_type: data.channelType },
+      });
+      if (fnError) throw new Error(fnError.message ?? 'فشل إكمال الربط');
+      if (result?.error) throw new Error(result.error as string);
+
+      setPageName((result.page_name as string) ?? page.name);
+      setPhase('done');
+
+      await onSave({
+        method: 'oauth_auto',
+        platform: data.channelType,
+        page_id: result.page_id as string,
+        page_access_token: result.page_access_token as string,
+        page_name: (result.page_name as string) ?? page.name,
+        ...(result.ig_id ? { ig_id: result.ig_id as string } : {}),
+        ...(result.ig_username ? { ig_username: result.ig_username as string } : {}),
+        connected_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذّر إكمال الربط');
+      setPhase('start');
+    }
+  }
+
+  if (!configured) {
+    return (
+      <Modal title={`ربط ${data.channelLabel} — تلقائي`} onClose={onClose}>
+        <div className="space-y-5">
+          <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800 leading-relaxed">
+            <div className="font-bold mb-2">⚠️ الربط التلقائي غير مفعّل بعد</div>
+            هذا يحتاج ضبط تطبيق فيسبوك من طرف مالك المنصة: أضف <code>VITE_FACEBOOK_APP_ID</code> بالواجهة
+            و<code>FACEBOOK_APP_ID</code> / <code>FACEBOOK_APP_SECRET</code> كأسرار على Supabase Edge Functions.
+          </div>
+          <button type="button" onClick={goToManual} className="btn-secondary w-full">
+            <Key size={16} /> استخدام الطريقة اليدوية بدلاً من ذلك
+          </button>
+          <button type="button" onClick={onClose} className="btn-secondary w-full">إغلاق</button>
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title={`ربط ${data.channelLabel} — تلقائي`} onClose={onClose}>
+      <div className="space-y-5">
+        {phase === 'done' ? (
+          <div className="text-center py-8 space-y-4">
+            <div className="h-20 w-20 rounded-full bg-green-100 flex items-center justify-center mx-auto">
+              <CheckCircle size={40} className="text-green-500" />
+            </div>
+            <div>
+              <div className="font-bold text-slate-900 text-xl">تم الربط! 🎉</div>
+              <p className="text-sm text-slate-500 mt-1">{pageName}</p>
+            </div>
+          </div>
+        ) : phase === 'choosing' ? (
+          <>
+            <p className="text-sm text-slate-500 text-center">اختر الصفحة التي تريد ربطها</p>
+            <div className="space-y-2 max-h-72 overflow-y-auto">
+              {pages.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => finishConnect(p)}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl border-2 border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-all text-right"
+                >
+                  <div className="h-10 w-10 rounded-lg bg-blue-100 flex items-center justify-center text-blue-600 flex-shrink-0">
+                    <Facebook size={18} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-slate-900 text-sm">{p.name}</div>
+                    {p.category && <div className="text-xs text-slate-400">{p.category}</div>}
+                  </div>
+                  <ArrowRight size={16} className="text-slate-300" />
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className={`rounded-2xl bg-gradient-to-br ${isIg ? 'from-pink-500 via-rose-500 to-orange-400' : 'from-blue-500 to-blue-700'} p-5 text-center text-white`}>
+              {isIg ? <Instagram size={36} className="mx-auto mb-2 opacity-90" /> : <Facebook size={36} className="mx-auto mb-2 opacity-90" />}
+              <div className="font-bold">تسجيل دخول بضغطة واحدة</div>
+            </div>
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-600 leading-relaxed">
+              <ol className="list-decimal list-inside space-y-1.5">
+                <li>اضغط الزر أدناه وسجّل دخولك بحساب فيسبوك</li>
+                <li>وافق على صلاحيات الوصول للصفحة{isIg ? ' وإنستغرام' : ''}</li>
+                <li>اختر صفحتك (إذا كان لديك أكثر من صفحة)</li>
+              </ol>
+              <p className="mt-2 text-xs text-slate-500">
+                بعدها بيصير فيه رد تلقائي على الرسائل، ونشر منشورات، دون أي إعداد إضافي.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={phase === 'finishing'}
+              onClick={startLogin}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#1877F2] hover:bg-[#1466d1] text-white font-bold py-3 transition-colors disabled:opacity-60"
+            >
+              {phase === 'finishing' ? <Spinner size="sm" /> : (
+                <>
+                  <Facebook size={18} /> تسجيل الدخول عبر فيسبوك
+                </>
+              )}
+            </button>
+            <button type="button" onClick={goToManual} className="w-full text-center text-xs text-slate-400 hover:text-slate-600 underline">
+              أفضّل إدخال البيانات يدويًا
+            </button>
+          </>
+        )}
+
+        {error && (
+          <div className="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">{error}</div>
+        )}
+
+        {phase !== 'done' && (
+          <button type="button" onClick={onClose} className="btn-secondary w-full">إلغاء</button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Step: OAuth (الطريقة اليدوية — Facebook / Instagram / Messenger) ─────────
 function StepOAuth({ data, onClose, onSave }: {
   data: ModalData;
   onClose: () => void;
@@ -829,7 +1064,7 @@ export function ConnectionsPage() {
     const existing = channels.find((c) => c.type === type);
 
     let step: ModalStep = 'choose';
-    if (type === 'messenger' || type === 'instagram') step = 'oauth';
+    if (type === 'messenger' || type === 'instagram') step = 'fb_choose';
     else if (type === 'website')                      step = 'widget';
     else if (!['whatsapp', 'telegram'].includes(type)) step = 'generic';
 
@@ -1005,6 +1240,8 @@ export function ConnectionsPage() {
                                                   ensureChannel={ensureWaChannel} onConnected={reload} toast={toast} />;
     if (step === 'tg_token')  return <StepTgToken  data={modal} onClose={closeModal} onSave={(cfg, lbl) => saveChannel(cfg, lbl)} />;
     if (step === 'tg_qr')     return <StepTgQr     onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
+    if (step === 'fb_choose') return <StepFbChoose data={modal} goTo={goTo} onClose={closeModal} />;
+    if (step === 'fb_login')  return <StepFbLogin  data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} goToManual={() => goTo('oauth')} />;
     if (step === 'oauth')     return <StepOAuth    data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
     if (step === 'widget')    return <StepWidget   data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
     if (step === 'generic')   return <StepGeneric  data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
@@ -1088,6 +1325,7 @@ export function ConnectionsPage() {
                         {cfg.method === 'qr'    && <><QrCode size={10} /> QR Code</>}
                         {cfg.method === 'token' && <><Bot   size={10} /> {cfg.bot_username ? `@${cfg.bot_username}` : 'Bot Token'}</>}
                         {cfg.method === 'oauth' && <><CheckCircle size={10} /> OAuth</>}
+                        {cfg.method === 'oauth_auto' && <><Sparkles size={10} /> ربط تلقائي</>}
                         {cfg.method === 'widget'&& <><Globe  size={10} /> Widget</>}
                       </div>
                     )}
