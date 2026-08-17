@@ -23,3 +23,15 @@ verify_jwt = false
 # الحماية جوّا الدالة: هيدر x-gateway-secret + التحقق من القناة.
 [functions.whatsapp-inbound]
 verify_jwt = false
+
+# ماسنجر فيسبوك بيبعت أحداث الرسائل لهاد الرابط مباشرة من سيرفرات فيسبوك،
+# بدون أي Authorization header. الحماية جوّا الدالة: توقيع X-Hub-Signature-256
+# (باستخدام FACEBOOK_APP_SECRET) + مطابقة page_id مع قناة موجودة فعليًا.
+[functions.messenger-webhook]
+verify_jwt = false
+
+# facebook-connect تُستدعى من التطبيق نفسه (بعد تسجيل الدخول من المتصفح)
+# وبتحمل JWT صالح — بس منسيبها verify_jwt = false لأنها تتحقق داخليًا،
+# وحتى ما تنكسر لو المستخدم بجلسة تجديد توكن مؤقتة.
+[functions.facebook-connect]
+verify_jwt = false
