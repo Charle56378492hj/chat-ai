@@ -697,17 +697,27 @@ function StepFbLogin({ data, onClose, onSave, goToManual }: {
   // أي خطأ بالكونسول وبدون أي رد أبدًا، فيضل الزر يدور للأبد. بتحميل السكربت
   // مسبقًا، لما يضغط الزر فعليًا بيصير استدعاء FB.login() شبه فوري.
   useEffect(() => {
-    if (configured) loadFacebookSdk().catch(() => {});
+    if (configured) {
+      console.log('[ConnectionsPage] عم نحمّل SDK مسبقًا فور فتح خطوة تسجيل الدخول');
+      loadFacebookSdk()
+        .then(() => console.log('[ConnectionsPage] preload SDK نجح ✅'))
+        .catch((e) => console.error('[ConnectionsPage] preload SDK فشل (رح نحاول تاني عند الضغط):', e));
+    } else {
+      console.warn('[ConnectionsPage] VITE_FACEBOOK_APP_ID غير مضبوط — الربط التلقائي معطّل');
+    }
   }, [configured]);
 
   async function startLogin() {
     if (phase === 'loading' || phase === 'finishing') return; // يمنع الضغط المتكرر
+    console.log('[ConnectionsPage] startLogin() بلّش، channelType =', data.channelType);
     setError(null);
     setPhase('loading');
     try {
       const { accessToken } = await facebookLogin();
+      console.log('[ConnectionsPage] facebookLogin() نجح، عم نجيب الصفحات');
       userTokenRef.current = accessToken;
       const list = await fetchManagedPages(accessToken);
+      console.log('[ConnectionsPage] عدد الصفحات:', list.length);
       if (list.length === 0) {
         setError('حسابك لا يدير أي صفحة فيسبوك. أنشئ صفحة فيسبوك لعملك أولًا ثم أعد المحاولة.');
         setPhase('start');
@@ -720,12 +730,14 @@ function StepFbLogin({ data, onClose, onSave, goToManual }: {
       setPages(list);
       setPhase('choosing');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'تعذّر تسجيل الدخول عبر فيسبوك');
+      console.error('[ConnectionsPage] startLogin() فشل بالخطأ التالي:', e);
+      setError(e instanceof Error ? e.message : `تعذّر تسجيل الدخول عبر فيسبوك (${String(e)})`);
       setPhase('start');
     }
   }
 
   async function finishConnect(page: FbPage) {
+    console.log('[ConnectionsPage] finishConnect() بلّش للصفحة:', page.name, page.id);
     setPhase('finishing');
     setError(null);
     try {
@@ -735,6 +747,7 @@ function StepFbLogin({ data, onClose, onSave, goToManual }: {
       const { data: result, error: fnError } = await supabase.functions.invoke('facebook-connect', {
         body: { user_access_token: token, page_id: page.id, channel_type: data.channelType },
       });
+      console.log('[ConnectionsPage] رد دالة facebook-connect:', { fnError, result });
       if (fnError) throw new Error(fnError.message ?? 'فشل إكمال الربط');
       if (result?.error) throw new Error(result.error as string);
 
@@ -751,8 +764,10 @@ function StepFbLogin({ data, onClose, onSave, goToManual }: {
         ...(result.ig_username ? { ig_username: result.ig_username as string } : {}),
         connected_at: new Date().toISOString(),
       });
+      console.log('[ConnectionsPage] finishConnect() نجح بالكامل ✅');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'تعذّر إكمال الربط');
+      console.error('[ConnectionsPage] finishConnect() فشل بالخطأ التالي:', e);
+      setError(e instanceof Error ? e.message : `تعذّر إكمال الربط (${String(e)})`);
       setPhase('start');
     }
   }
