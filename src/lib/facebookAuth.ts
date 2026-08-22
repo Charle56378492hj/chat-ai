@@ -45,32 +45,52 @@ interface FbLoginResponse {
 }
 
 let sdkPromise: Promise<void> | null = null;
+// نتتبّع التهيئة الفعلية بأنفسنا بدل الاعتماد على window.FB وحده — لأنو
+// window.FB بينخلق فور ما سكربت فيسبوك يبلّش يتفسّر، قبل ما FB.init() يشتغل
+// فعليًا جوا fbAsyncInit. الاعتماد على "if (window.FB)" وحده كان يخلّي
+// الكود يظن إنو التهيئة خلصت وهي لسا ما بلّشت، فيصير FB.login() قبل init().
+let fbInitialized = false;
 
 /** يحمّل Facebook SDK مرة وحدة فقط ويهيّئه بالـ App ID. */
 export function loadFacebookSdk(): Promise<void> {
   if (!isFacebookLoginConfigured()) {
     return Promise.reject(new Error('لم يتم ضبط ربط فيسبوك التلقائي بعد (VITE_FACEBOOK_APP_ID).'));
   }
+  if (fbInitialized) return Promise.resolve();
   if (sdkPromise) return sdkPromise;
 
   sdkPromise = new Promise((resolve, reject) => {
-    if (window.FB) { resolve(); return; }
-
-    window.fbAsyncInit = () => {
+    const finishInit = () => {
       try {
         window.FB!.init({
           appId: FACEBOOK_APP_ID,
           xfbml: false,
           version: 'v21.0',
         });
+        fbInitialized = true;
         resolve();
       } catch (e) {
+        sdkPromise = null; // نسمح بإعادة المحاولة لاحقًا
         reject(e instanceof Error ? e : new Error('تعذّر تهيئة Facebook SDK'));
       }
     };
 
+    // إذا السكربت محمّل من قبل (window.FB موجود) بس لسا ما استدعينا init
+    // بنفسنا، نبادر نهيّئه هلق بدل ما ننتظر fbAsyncInit يلي ما رح يُستدعى
+    // تاني (فيسبوك بيستدعيه مرة وحدة بس عند أول تحميل للسكربت).
+    if (window.FB) { finishInit(); return; }
+
+    window.fbAsyncInit = finishInit;
+
     const existing = document.getElementById('facebook-jssdk');
     if (existing) return; // بينفّذ fbAsyncInit لما يخلص التحميل
+
+    // مهلة أمان: إذا السكربت ما حمّل خلال ١٥ ثانية (حجب إعلانات، تقييد شبكة،
+    // إلخ) منرفض بدل ما نضل معلّقين للأبد وكأنو "ما عم يصير اي شي".
+    const timeout = setTimeout(() => {
+      sdkPromise = null;
+      reject(new Error('تعذّر تحميل Facebook SDK خلال وقت معقول. تحقق من اتصالك بالإنترنت أو عطّل أي أداة حجب إعلانات وحاول مجددًا.'));
+    }, 15_000);
 
     const script = document.createElement('script');
     script.id = 'facebook-jssdk';
@@ -78,7 +98,12 @@ export function loadFacebookSdk(): Promise<void> {
     script.async = true;
     script.defer = true;
     script.crossOrigin = 'anonymous';
-    script.onerror = () => reject(new Error('تعذّر تحميل Facebook SDK. تحقق من الاتصال بالإنترنت.'));
+    script.onload = () => clearTimeout(timeout);
+    script.onerror = () => {
+      clearTimeout(timeout);
+      sdkPromise = null;
+      reject(new Error('تعذّر تحميل Facebook SDK. تحقق من الاتصال بالإنترنت أو عطّل أداة حجب الإعلانات.'));
+    };
     document.body.appendChild(script);
   });
 
@@ -88,6 +113,9 @@ export function loadFacebookSdk(): Promise<void> {
 /** يفتح نافذة تسجيل الدخول الرسمية ويرجّع توكن مستخدم قصير الأمد. */
 export async function facebookLogin(): Promise<{ accessToken: string; userId: string }> {
   await loadFacebookSdk();
+  if (!fbInitialized || !window.FB) {
+    throw new Error('لم تكتمل تهيئة Facebook SDK بعد. حاول مجددًا خلال لحظات.');
+  }
   return new Promise((resolve, reject) => {
     window.FB!.login(
       (res) => {
