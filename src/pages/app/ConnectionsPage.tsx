@@ -10,7 +10,7 @@ import {
   WA_STATUS_LABEL, type WaSnapshot,
 } from '../../lib/whatsappGateway';
 import {
-  isFacebookLoginConfigured, facebookLogin, fetchManagedPages, type FbPage,
+  isFacebookLoginConfigured, facebookLogin, fetchManagedPages, loadFacebookSdk, type FbPage,
 } from '../../lib/facebookAuth';
 import {
   MessageCircle, Facebook, Instagram, Send, Globe, Smartphone, Mail, Music,
@@ -689,6 +689,16 @@ function StepFbLogin({ data, onClose, onSave, goToManual }: {
   const [pageName, setPageName] = useState('');
   const userTokenRef = useRef<string | null>(null);
   const configured = isFacebookLoginConfigured();
+
+  // نحمّل ونهيّئ Facebook SDK فور ما تنفتح هاي الخطوة (مو وقت الضغط على الزر).
+  // السبب: لو انتظرنا تحميل السكربت داخل onClick، بيصير فيه فاصل زمني (await)
+  // بين ضغطة المستخدم وفتح نافذة تسجيل الدخول — والمتصفح ممكن يعتبر هاد
+  // الفاصل "كسر" لحركة المستخدم المباشرة ويحظر النافذة المنبثقة بصمت، بدون
+  // أي خطأ بالكونسول وبدون أي رد أبدًا، فيضل الزر يدور للأبد. بتحميل السكربت
+  // مسبقًا، لما يضغط الزر فعليًا بيصير استدعاء FB.login() شبه فوري.
+  useEffect(() => {
+    if (configured) loadFacebookSdk().catch(() => {});
+  }, [configured]);
 
   async function startLogin() {
     if (phase === 'loading' || phase === 'finishing') return; // يمنع الضغط المتكرر
