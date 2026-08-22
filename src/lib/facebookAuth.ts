@@ -117,8 +117,16 @@ export async function facebookLogin(): Promise<{ accessToken: string; userId: st
     throw new Error('لم تكتمل تهيئة Facebook SDK بعد. حاول مجددًا خلال لحظات.');
   }
   return new Promise((resolve, reject) => {
+    // مهلة أمان: لو نافذة تسجيل الدخول انحظرت بصمت من المتصفح (popup blocker)،
+    // FB.login() ما بترجّع ولا نداء أبدًا — بدون هاي المهلة كان المستخدم
+    // بضل يتفرج عالزر يدور للأبد بلا أي تفسير.
+    const timeout = setTimeout(() => {
+      reject(new Error('لم تفتح نافذة تسجيل الدخول. تأكد أن متصفحك لا يحظر النوافذ المنبثقة (popup) لهذا الموقع ثم حاول مجددًا.'));
+    }, 30_000);
+
     window.FB!.login(
       (res) => {
+        clearTimeout(timeout);
         if (res.status === 'connected' && res.authResponse) {
           resolve({ accessToken: res.authResponse.accessToken, userId: res.authResponse.userID });
         } else if (res.status === 'not_authorized') {
