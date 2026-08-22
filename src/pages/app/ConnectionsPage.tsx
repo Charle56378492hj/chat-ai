@@ -683,7 +683,7 @@ function StepFbLogin({ data, onClose, onSave, goToManual }: {
   goToManual: () => void;
 }) {
   const isIg = data.channelType === 'instagram';
-  const [phase, setPhase] = useState<'start' | 'choosing' | 'finishing' | 'done'>('start');
+  const [phase, setPhase] = useState<'start' | 'loading' | 'choosing' | 'finishing' | 'done'>('start');
   const [error, setError] = useState<string | null>(null);
   const [pages, setPages] = useState<FbPage[]>([]);
   const [pageName, setPageName] = useState('');
@@ -691,13 +691,16 @@ function StepFbLogin({ data, onClose, onSave, goToManual }: {
   const configured = isFacebookLoginConfigured();
 
   async function startLogin() {
+    if (phase === 'loading' || phase === 'finishing') return; // يمنع الضغط المتكرر
     setError(null);
+    setPhase('loading');
     try {
       const { accessToken } = await facebookLogin();
       userTokenRef.current = accessToken;
       const list = await fetchManagedPages(accessToken);
       if (list.length === 0) {
         setError('حسابك لا يدير أي صفحة فيسبوك. أنشئ صفحة فيسبوك لعملك أولًا ثم أعد المحاولة.');
+        setPhase('start');
         return;
       }
       if (list.length === 1) {
@@ -708,6 +711,7 @@ function StepFbLogin({ data, onClose, onSave, goToManual }: {
       setPhase('choosing');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'تعذّر تسجيل الدخول عبر فيسبوك');
+      setPhase('start');
     }
   }
 
@@ -815,11 +819,11 @@ function StepFbLogin({ data, onClose, onSave, goToManual }: {
             </div>
             <button
               type="button"
-              disabled={phase === 'finishing'}
+              disabled={phase === 'finishing' || phase === 'loading'}
               onClick={startLogin}
               className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#1877F2] hover:bg-[#1466d1] text-white font-bold py-3 transition-colors disabled:opacity-60"
             >
-              {phase === 'finishing' ? <Spinner size="sm" /> : (
+              {phase === 'finishing' || phase === 'loading' ? <Spinner size="sm" /> : (
                 <>
                   <Facebook size={18} /> تسجيل الدخول عبر فيسبوك
                 </>
