@@ -1,20 +1,181 @@
-import { useEffect, useState, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useState, useRef } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMerchantData, fetchMessages, sendMessage } from '../../lib/hooks';
 import { Badge, Spinner, EmptyState } from '../../components/ui';
 import { timeAgo, formatCurrency } from '../../lib/format';
 import { CONVERSATION_STATUSES } from '../../lib/constants';
 import { supabase } from '../../lib/supabase';
 import { sendTelegramText } from '../../lib/telegramGateway';
+import { getGmailMessage, listGmailMessages, sendGmailMessage, type GmailMessageSummary } from '../../lib/gmailGateway';
 import type { Message } from '../../lib/types';
 import {
   Bot, Send, Search, UserPlus, Star, FileText,
   ShoppingCart, Mail, ZapOff, Plus, StickyNote,
-  Package, MessageSquare,
+  Package, MessageSquare, RefreshCw,
 } from 'lucide-react';
 
+function gmailDate(message: GmailMessageSummary): string {
+  const value = message.internal_date ?? message.date;
+  if (!value) return '';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? message.date : parsed.toLocaleString('ar-SA', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+function GmailMailbox({ hasChannel }: { hasChannel: boolean }) {
+  const [messages, setMessages] = useState<GmailMessageSummary[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedMessage, setSelectedMessage] = useState<GmailMessageSummary | null>(null);
+  const [query, setQuery] = useState('');
+  const [to, setTo] = useState('');
+  const [cc, setCc] = useState('');
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const loadMessages = useCallback(async (search = '') => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await listGmailMessages({ q: search.trim(), maxResults: 25, labelId: 'INBOX' });
+      setMessages(result.messages);
+      if (result.messages[0]) setSelectedId((current) => current ?? result.messages[0].id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذّر تحميل رسائل Gmail.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (hasChannel) void loadMessages('');
+  }, [hasChannel, loadMessages]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setSelectedMessage(null);
+      return;
+    }
+    setOpening(true);
+    setError(null);
+    getGmailMessage(selectedId)
+      .then((result) => setSelectedMessage(result.message))
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذّر فتح الرسالة.'))
+      .finally(() => setOpening(false));
+  }, [selectedId]);
+
+  async function handleSendGmail() {
+    if (!to.trim() || !subject.trim() || !body.trim()) {
+      setError('المستلم والموضوع ومحتوى الرسالة حقول مطلوبة.');
+      return;
+    }
+    setSending(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await sendGmailMessage({ to, cc, subject, body });
+      setTo('');
+      setCc('');
+      setSubject('');
+      setBody('');
+      setNotice('تم إرسال الرسالة من Gmail بنجاح.');
+      await loadMessages('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذّر إرسال الرسالة.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (!hasChannel) {
+    return (
+      <div className="card p-8 text-center">
+        <Mail size={38} className="mx-auto mb-3 text-slate-300" />
+        <h2 className="font-bold text-slate-900 text-lg">لا يوجد حساب Gmail مربوط</h2>
+        <p className="text-sm text-slate-500 mt-1 mb-5">اربط حساب Google من صفحة القنوات أولًا لتقرأ الرسائل وترسلها.</p>
+        <Link to="/app/connections" className="btn-primary btn-sm inline-flex">ربط Gmail الآن</Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-8rem)] lg:h-[calc(100vh-7rem)]">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h1 className="text-2xl font-extrabold text-slate-900">بريد Gmail</h1>
+          <p className="text-sm text-slate-500 mt-1">قراءة الرسائل والرد عليها مباشرة من الحساب المربوط</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link to="/app/inbox" className="btn-secondary btn-sm">المحادثات</Link>
+          <button type="button" onClick={() => void loadMessages(query)} className="btn-secondary btn-sm" disabled={loading}>
+            {loading ? <Spinner size="sm" /> : <><RefreshCw size={14} /> تحديث</>}
+          </button>
+        </div>
+      </div>
+
+      {(error || notice) && (
+        <div className={`mb-3 rounded-xl border px-4 py-3 text-sm ${error ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-green-50 border-green-200 text-green-700'}`}>
+          {error ?? notice}
+        </div>
+      )}
+
+      <div className="flex-1 grid lg:grid-cols-[18rem_minmax(0,1fr)_20rem] gap-4 min-h-0">
+        <div className="card flex flex-col min-h-0">
+          <div className="p-3 border-b border-slate-100">
+            <div className="relative">
+              <Search size={15} className="absolute right-3 top-2.5 text-slate-400" />
+              <input className="input pr-9 py-2 text-sm" placeholder="بحث في Gmail..." value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void loadMessages(); }} />
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {loading && messages.length === 0 ? <div className="flex justify-center py-8"><Spinner /></div> : messages.length === 0 ? (
+              <div className="p-6 text-center text-sm text-slate-400">لا توجد رسائل في صندوق الوارد</div>
+            ) : messages.map((message) => (
+              <button key={message.id} type="button" onClick={() => setSelectedId(message.id)} className={`w-full p-3 text-right border-b border-slate-50 transition-colors ${selectedId === message.id ? 'bg-sky-50' : 'hover:bg-slate-50'}`}>
+                <div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-slate-500 truncate">{message.from || 'مرسل غير معروف'}</span><span className="text-[10px] text-slate-400 flex-shrink-0">{gmailDate(message)}</span></div>
+                <div className={`text-sm truncate mt-1 ${message.label_ids?.includes('UNREAD') ? 'font-bold text-slate-900' : 'font-semibold text-slate-700'}`}>{message.subject}</div>
+                <div className="text-xs text-slate-400 truncate mt-1">{message.snippet}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="card flex flex-col min-w-0 min-h-0">
+          {opening ? <div className="flex justify-center py-12"><Spinner /></div> : selectedMessage ? (
+            <>
+              <div className="p-4 border-b border-slate-100">
+                <h2 className="font-bold text-slate-900 text-lg break-words">{selectedMessage.subject}</h2>
+                <div className="text-xs text-slate-500 mt-2 break-words"><span className="font-semibold">من:</span> {selectedMessage.from}</div>
+                <div className="text-xs text-slate-500 mt-1 break-words"><span className="font-semibold">إلى:</span> {selectedMessage.to}</div>
+                <div className="text-[11px] text-slate-400 mt-1">{gmailDate(selectedMessage)}</div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5 whitespace-pre-wrap text-sm leading-7 text-slate-700">{selectedMessage.body_text ?? selectedMessage.snippet}</div>
+            </>
+          ) : <div className="flex-1 flex items-center justify-center text-sm text-slate-400">اختر رسالة لعرض محتواها</div>}
+        </div>
+
+        <div className="card p-4 overflow-y-auto">
+          <div className="flex items-center gap-2 mb-4"><Mail size={18} className="text-red-500" /><h2 className="font-bold text-slate-900">رسالة جديدة</h2></div>
+          <div className="space-y-3">
+            <div><label className="label">إلى <span className="text-red-500">*</span></label><input className="input text-sm" placeholder="customer@example.com" value={to} onChange={(e) => setTo(e.target.value)} /></div>
+            <div><label className="label">نسخة CC</label><input className="input text-sm" placeholder="اختياري" value={cc} onChange={(e) => setCc(e.target.value)} /></div>
+            <div><label className="label">الموضوع <span className="text-red-500">*</span></label><input className="input text-sm" value={subject} onChange={(e) => setSubject(e.target.value)} /></div>
+            <div><label className="label">المحتوى <span className="text-red-500">*</span></label><textarea className="input text-sm resize-none min-h-[12rem]" value={body} onChange={(e) => setBody(e.target.value)} /></div>
+            <button type="button" onClick={() => void handleSendGmail()} disabled={sending} className="btn-primary w-full justify-center">{sending ? <Spinner size="sm" /> : <><Send size={15} /> إرسال عبر Gmail</>}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function InboxPage() {
+  const [searchParams] = useSearchParams();
   const { conversations, customers, channels, loading, reload } = useMerchantData();
+  const emailChannel = channels.find((item) => item.type === 'email' && item.status === 'connected');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [msgLoading, setMsgLoading] = useState(false);
@@ -117,6 +278,7 @@ export function InboxPage() {
   });
 
   if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
+  if (searchParams.get('channel') === 'email') return <GmailMailbox hasChannel={Boolean(emailChannel)} />;
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] lg:h-[calc(100vh-7rem)]">
