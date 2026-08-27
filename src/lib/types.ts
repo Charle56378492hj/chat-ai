@@ -44,6 +44,7 @@ export interface Customer {
   name: string | null;
   phone: string | null;
   email: string | null;
+  external_id?: string | null;
   city: string | null;
   address: string | null;
   channel: string | null;
