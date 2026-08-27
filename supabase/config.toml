@@ -35,3 +35,8 @@ verify_jwt = false
 # وحتى ما تنكسر لو المستخدم بجلسة تجديد توكن مؤقتة.
 [functions.facebook-connect]
 verify_jwt = false
+
+# Google OAuth callback يصل من Google بدون JWT، بينما بقية الإجراءات
+# تتحقق داخليًا من Authorization داخل الدالة.
+[functions.google-gmail]
+verify_jwt = false
