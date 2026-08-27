@@ -2,14 +2,15 @@ import { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useMerchantData, fetchMessages, sendMessage } from '../../lib/hooks';
 import { Badge, Spinner, EmptyState } from '../../components/ui';
-import { timeAgo, formatDateTime, formatCurrency } from '../../lib/format';
+import { timeAgo, formatCurrency } from '../../lib/format';
 import { CONVERSATION_STATUSES } from '../../lib/constants';
 import { supabase } from '../../lib/supabase';
+import { sendTelegramText } from '../../lib/telegramGateway';
 import type { Message } from '../../lib/types';
 import {
-  Bot, Send, Search, UserPlus, BellOff, Star, FileText,
-  ShoppingCart, Mail, Zap, ZapOff, Plus, StickyNote, X,
-  Check, Package, MessageSquare,
+  Bot, Send, Search, UserPlus, Star, FileText,
+  ShoppingCart, Mail, ZapOff, Plus, StickyNote,
+  Package, MessageSquare,
 } from 'lucide-react';
 
 export function InboxPage() {
@@ -20,6 +21,7 @@ export function InboxPage() {
   const [input, setInput] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
+  const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const selected = conversations.find((c) => c.id === selectedId);
@@ -60,6 +62,21 @@ export function InboxPage() {
     if (!input.trim() || !selectedId) return;
     const content = input;
     setInput('');
+    setSendError(null);
+    if (channel?.type === 'telegram' && channel.config?.method === 'qr') {
+      if (!customer?.external_id) {
+        setInput(content);
+        setSendError('لا يوجد معرّف تيليغرام صالح لهذا العميل.');
+        return;
+      }
+      try {
+        await sendTelegramText(channel.id, customer.external_id, content);
+      } catch (error) {
+        setInput(content);
+        setSendError(error instanceof Error ? error.message : 'تعذّر إرسال الرسالة إلى تيليغرام');
+        return;
+      }
+    }
     await sendMessage(selectedId, content, 'agent', false);
     const msgs = await fetchMessages(selectedId);
     setMessages(msgs);
@@ -257,6 +274,7 @@ export function InboxPage() {
 
             {/* Message input */}
             <div className="border-t border-slate-100 p-3">
+              {sendError && <div className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{sendError}</div>}
               <div className="flex gap-2 items-end">
                 <div className="flex-1 relative">
                   <textarea
