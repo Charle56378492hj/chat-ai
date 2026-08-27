@@ -22,6 +22,9 @@ import {
   Activity, ExternalLink, Zap, QrCode, Key, Bot, Copy,
   CheckCircle, ArrowRight, Shield, Settings, Wifi, Sparkles, LogIn,
 } from 'lucide-react';
+import {
+  disconnectGmail, getGmailConnection, isGmailConfigured, startGmailAuthorization,
+} from '../../lib/gmailGateway';
 
 // ─── Icon map ────────────────────────────────────────────────────────────────
 const iconMap: Record<string, typeof MessageCircle> = {
@@ -57,6 +60,7 @@ type ModalStep =
   | 'wa_api' | 'wa_qr'
   | 'tg_token' | 'tg_qr'
   | 'fb_choose' | 'fb_login'
+  | 'gmail_oauth'
   | 'oauth'
   | 'generic'
   | 'widget';
@@ -970,6 +974,63 @@ function StepFbLogin({ data, onClose, onSave, goToManual }: {
   );
 }
 
+// ─── Step: Gmail OAuth (الطريقة الأسهل) ───────────────────────────────────────
+function StepGmailOAuth({ data, onClose }: {
+  data: ModalData;
+  onClose: () => void;
+}) {
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const configured = isGmailConfigured();
+
+  async function connect() {
+    if (starting) return;
+    setStarting(true);
+    setError(null);
+    try {
+      await startGmailAuthorization(`${window.location.origin}/app/connections`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذّر بدء ربط Gmail.');
+      setStarting(false);
+    }
+  }
+
+  return (
+    <Modal title={`ربط ${data.channelLabel}`} onClose={onClose} wide>
+      <div className="space-y-5">
+        <div className="rounded-2xl bg-gradient-to-br from-red-500 via-orange-500 to-yellow-400 p-5 text-center text-white">
+          <Mail size={38} className="mx-auto mb-2 opacity-95" />
+          <div className="font-bold text-lg">اربط Gmail بضغطة واحدة</div>
+          <p className="text-sm text-white/85 mt-1">اختر حساب Google وسيتم تفعيل القراءة والإرسال تلقائيًا</p>
+        </div>
+
+        <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-600 leading-relaxed">
+          <div className="flex items-center gap-2 font-bold text-slate-800 mb-2"><Shield size={16} className="text-green-600" /> ربط آمن ورسمي</div>
+          <ul className="list-disc list-inside space-y-1.5">
+            <li>تنتقل إلى صفحة Google الرسمية لاختيار الحساب والموافقة على الصلاحيات.</li>
+            <li>لا نطلب كلمة مرور Gmail ولا نعرضها داخل المنصة.</li>
+            <li>بعد الموافقة تستطيع المنصة قراءة الرسائل وإرسال الردود من الحساب المربوط.</li>
+          </ul>
+        </div>
+
+        {!configured && (
+          <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800 leading-relaxed">
+            ربط Gmail غير مفعّل على الخادم بعد. يجب إضافة إعدادات Google OAuth الموضحة في ملف الشرح، ثم نشر دالة <code>google-gmail</code>.
+          </div>
+        )}
+        {error && <div className="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">{error}</div>}
+
+        <div className="flex gap-3 pt-2 border-t border-slate-100">
+          <button type="button" onClick={onClose} className="btn-secondary flex-1">إلغاء</button>
+          <button type="button" onClick={connect} disabled={!configured || starting} className="btn-primary flex-1">
+            {starting ? <Spinner size="sm" /> : <><LogIn size={16} /> متابعة مع Google</>}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Step: OAuth (الطريقة اليدوية — Facebook / Instagram / Messenger) ─────────
 function StepOAuth({ data, onClose, onSave }: {
   data: ModalData;
@@ -1175,6 +1236,8 @@ export function ConnectionsPage() {
   const { user } = useAuth();
   const [modal, setModal]   = useState<ModalData | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
+  const reloadRef = useRef(reload);
+  reloadRef.current = reload;
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   // ── helpers ──
@@ -1193,7 +1256,8 @@ export function ConnectionsPage() {
     let step: ModalStep = 'choose';
     if (type === 'telegram')                         step = 'tg_qr';
     else if (type === 'messenger' || type === 'instagram') step = 'fb_choose';
-    else if (type === 'website')                      step = 'widget';
+    else if (type === 'email')                           step = 'gmail_oauth';
+    else if (type === 'website')                         step = 'widget';
     else if (!['whatsapp', 'telegram'].includes(type)) step = 'generic';
 
     setModal({
@@ -1210,6 +1274,23 @@ export function ConnectionsPage() {
   }
 
   function closeModal() { setModal(null); }
+
+  // Google يعيد المستخدم إلى هذه الصفحة بعد الموافقة. نعرض نتيجة واضحة
+  // وننظف query parameters حتى لا تظهر رسالة النجاح مرة أخرى عند التحديث.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get('gmail');
+    if (!result) return;
+    const reason = params.get('reason');
+    if (result === 'connected') toast(`✅ تم ربط Gmail${params.get('email') ? ` — ${params.get('email')}` : ''} بنجاح`);
+    else toast(`❌ ${reason ?? 'فشل ربط Gmail'}`, false);
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('gmail');
+    cleanUrl.searchParams.delete('email');
+    cleanUrl.searchParams.delete('reason');
+    window.history.replaceState({}, document.title, cleanUrl.toString());
+    reloadRef.current();
+  }, []);
 
   // ينشئ (أو يعيد) سجل قناة واتساب قبل بدء جلسة QR — البوابة بتحتاج channel_id.
   async function ensureWaChannel(): Promise<string> {
@@ -1323,6 +1404,14 @@ export function ConnectionsPage() {
         return;
       }
     }
+    if (channel?.type === 'email' && cfg.method === 'oauth_google') {
+      try {
+        await disconnectGmail();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : '❌ تعذّر فصل حساب Gmail', false);
+        return;
+      }
+    }
     const { error } = await supabase.from('channels').update({ status: 'disconnected' }).eq('id', id);
     if (error) { toast('❌ فشل الفصل', false); return; }
     reload();
@@ -1346,6 +1435,18 @@ export function ConnectionsPage() {
         } else {
           toast(`⚠️ حالة حساب تيليغرام: ${TG_STATUS_LABEL[snapshot.status] ?? snapshot.status}`, false);
         }
+        return;
+      }
+
+      if (channel?.type === 'email' && cfg.method === 'oauth_google') {
+        const result = await getGmailConnection();
+        if (!result.connected || !result.connection) {
+          toast('❌ حساب Gmail غير متاح. أعد الربط من جديد.', false);
+          return;
+        }
+        await supabase.from('channels').update({ last_sync: new Date().toISOString() }).eq('id', id);
+        reload();
+        toast(`✅ Gmail متصل ويعمل (${result.connection.email})`);
         return;
       }
 
@@ -1408,8 +1509,9 @@ export function ConnectionsPage() {
     if (step === 'tg_token')  return <StepTgToken  data={modal} onClose={closeModal} onSave={(cfg, lbl) => saveChannel(cfg, lbl)} />;
     if (step === 'tg_qr')     return <StepTgQr     onClose={closeModal} goToToken={() => goTo('tg_token')}
                                                    ensureChannel={ensureTgChannel} onConnected={reload} toast={toast} />;
-    if (step === 'fb_choose') return <StepFbChoose data={modal} goTo={goTo} onClose={closeModal} />;
-    if (step === 'fb_login')  return <StepFbLogin  data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} goToManual={() => goTo('oauth')} />;
+    if (step === 'fb_choose')  return <StepFbChoose data={modal} goTo={goTo} onClose={closeModal} />;
+    if (step === 'fb_login')   return <StepFbLogin  data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} goToManual={() => goTo('oauth')} />;
+    if (step === 'gmail_oauth') return <StepGmailOAuth data={modal} onClose={closeModal} />;
     if (step === 'oauth')     return <StepOAuth    data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
     if (step === 'widget')    return <StepWidget   data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
     if (step === 'generic')   return <StepGeneric  data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
@@ -1494,6 +1596,7 @@ export function ConnectionsPage() {
                         {cfg.method === 'token' && <><Bot   size={10} /> {cfg.bot_username ? `@${cfg.bot_username}` : 'Bot Token'}</>}
                         {cfg.method === 'oauth' && <><CheckCircle size={10} /> OAuth</>}
                         {cfg.method === 'oauth_auto' && <><Sparkles size={10} /> ربط تلقائي</>}
+                        {cfg.method === 'oauth_google' && <><CheckCircle size={10} /> Google OAuth — قراءة وإرسال</>}
                         {cfg.method === 'widget'&& <><Globe  size={10} /> Widget</>}
                       </div>
                     )}
@@ -1512,6 +1615,11 @@ export function ConnectionsPage() {
                 <div className="flex items-center gap-2">
                   {isOn ? (
                     <>
+                      {ch.value === 'email' && cfg.method === 'oauth_google' && (
+                        <a href="/app/inbox?channel=email" className="btn-primary btn-sm flex-1 justify-center">
+                          <Mail size={13} /> فتح البريد
+                        </a>
+                      )}
                       <button type="button"
                         disabled={testing === row?.id}
                         onClick={() => row && testChannel(row.id, ch.label)}
