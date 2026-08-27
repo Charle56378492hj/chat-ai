@@ -13,6 +13,10 @@ import {
   isFacebookLoginConfigured, facebookLogin, fetchManagedPages, loadFacebookSdk, type FbPage,
 } from '../../lib/facebookAuth';
 import {
+  isTelegramGatewayConfigured, startTelegramSession, getTelegramStatus,
+  logoutTelegramSession, submitTelegramPassword, TG_STATUS_LABEL, type TelegramSnapshot,
+} from '../../lib/telegramGateway';
+import {
   MessageCircle, Facebook, Instagram, Send, Globe, Smartphone, Mail, Music,
   ShoppingBag, Search, RefreshCw, Plug, Trash2, Check, X,
   Activity, ExternalLink, Zap, QrCode, Key, Bot, Copy,
@@ -552,59 +556,153 @@ function StepTgToken({ data, onClose, onSave }: {
   );
 }
 
-// ─── Step: Telegram QR ────────────────────────────────────────────────────────
-function StepTgQr({ onClose, onSave }: {
+// ─── Step: Telegram QR (MTProto / GramJS) ─────────────────────────────────────
+// هذا ليس QR شكليًا من نوع tg://login?token عشوائي. البوابة تنشئ
+// auth token حقيقي من Telegram MTProto، وتبقى تستطلع حالة تسجيل الدخول حتى
+// يؤكد تيليغرام الجلسة ثم تحفظها البوابة بشكل مشفّر.
+function StepTgQr({ onClose, goToToken, ensureChannel, onConnected, toast }: {
   onClose: () => void;
-  onSave: (cfg: Record<string, string>) => Promise<void>;
+  goToToken: () => void;
+  ensureChannel: () => Promise<string>;
+  onConnected: () => void;
+  toast: (msg: string, ok?: boolean) => void;
 }) {
-  const session  = useRef(`tg-${Date.now()}`);
-  const [confirmed, setConfirmed] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [snap, setSnap] = useState<TelegramSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [password, setPassword] = useState('');
+  const [submittingPassword, setSubmittingPassword] = useState(false);
+  const channelIdRef = useRef<string | null>(null);
+  const configured = isTelegramGatewayConfigured();
 
-  async function finish() {
-    setSaving(true);
-    await onSave({ method: 'qr', session: session.current });
-    setSaving(false);
+  const begin = useCallback(async (forceNewQr: boolean) => {
+    setError(null);
+    setStarting(true);
+    try {
+      const id = channelIdRef.current ?? (await ensureChannel());
+      channelIdRef.current = id;
+      setSnap(await startTelegramSession(id, forceNewQr));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذّر بدء جلسة تيليغرام');
+    } finally {
+      setStarting(false);
+    }
+  }, [ensureChannel]);
+
+  useEffect(() => {
+    if (configured) void begin(false);
+  }, [configured, begin]);
+
+  useEffect(() => {
+    if (!configured) return;
+    let alive = true;
+    const timer = setInterval(async () => {
+      const id = channelIdRef.current;
+      if (!id || !alive) return;
+      try {
+        const next = await getTelegramStatus(id);
+        if (!alive) return;
+        setSnap(next);
+        if (next.status === 'connected') {
+          clearInterval(timer);
+          toast(`تم ربط حساب تيليغرام بنجاح${next.username ? ` (@${next.username})` : ''} ✅`);
+          onConnected();
+          onClose();
+        }
+      } catch (e) {
+        if (alive) setError(e instanceof Error ? e.message : 'تعذّر قراءة حالة الجلسة');
+      }
+    }, 1500);
+    return () => { alive = false; clearInterval(timer); };
+  }, [configured, onClose, onConnected, toast]);
+
+  async function sendPassword() {
+    const id = channelIdRef.current;
+    if (!id || !password) return;
+    setSubmittingPassword(true);
+    setError(null);
+    try {
+      await submitTelegramPassword(id, password);
+      setPassword('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذّر إرسال كلمة المرور');
+    } finally {
+      setSubmittingPassword(false);
+    }
   }
 
   return (
-    <Modal title="تيليغرام — حساب كامل (QR)" onClose={onClose}>
-      {!confirmed ? (
+    <Modal title="تيليغرام — ربط الحساب عبر QR" onClose={onClose}>
+      {!configured ? (
         <div className="space-y-5">
-          <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-700">
-            ⚠️ هذا يربط <strong>حسابك الشخصي</strong> وليس بوت. استخدمه بحذر.
+          <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800 leading-relaxed">
+            <div className="font-bold mb-2">⚠️ بوابة تيليغرام غير مضبوطة</div>
+            شغّل خدمة <code>telegram-server</code> وأضف رابطها في
+            <code className="mx-1">VITE_TELEGRAM_GATEWAY_URL</code> ثم أعد بناء الواجهة.
           </div>
-          <QrImage value={`tg://login?token=${session.current}`} />
-          <div className="rounded-xl bg-slate-50 border border-slate-200 p-4">
-            <div className="font-bold text-slate-800 mb-2 text-sm">📱 خطوات الربط:</div>
-            <ol className="list-decimal list-inside space-y-1.5 text-sm text-slate-600">
-              <li>افتح <strong>تيليغرام</strong> على هاتفك</li>
-              <li>اذهب إلى <strong>الإعدادات → الأجهزة</strong></li>
-              <li>اضغط <strong>"ربط جهاز سطح المكتب"</strong></li>
-              <li>امسح الـ QR</li>
-            </ol>
-          </div>
-          <div className="flex items-center gap-2 text-sm text-slate-400 justify-center">
-            <Spinner size="sm" /> <span>في انتظار المسح...</span>
-          </div>
-          <div className="flex gap-3">
-            <button type="button" onClick={onClose} className="btn-secondary flex-1">إلغاء</button>
-            <button type="button" onClick={() => setConfirmed(true)} className="btn-primary flex-1">
-              <Check size={16} /> تم المسح
-            </button>
-          </div>
+          <button type="button" onClick={goToToken} className="btn-secondary w-full">
+            <Bot size={16} /> استخدام ربط البوت بالتوكن
+          </button>
+          <button type="button" onClick={onClose} className="btn-secondary w-full">إغلاق</button>
         </div>
       ) : (
-        <div className="text-center py-8 space-y-4">
-          <div className="h-20 w-20 rounded-full bg-green-100 flex items-center justify-center mx-auto">
-            <CheckCircle size={40} className="text-green-500" />
+        <div className="space-y-5">
+          <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-700">
+            ⚠️ هذا يربط حساب تيليغرام الشخصي عبر MTProto. لا تشارك الجلسة أو بيانات البوابة مع أي شخص.
           </div>
-          <div>
-            <div className="font-bold text-slate-900 text-xl">تم الربط! 🎉</div>
-            <p className="text-sm text-slate-500 mt-1">حساب تيليغرام متصل</p>
+          <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 flex flex-col items-center gap-3">
+            {snap?.qr_image ? (
+              <div className="flex justify-center p-3 bg-white border-2 border-slate-100 rounded-2xl shadow-inner">
+                <img src={snap.qr_image} alt="QR تيليغرام" width={240} height={240} className="rounded-xl" />
+              </div>
+            ) : snap?.qr_value ? <QrImage value={snap.qr_value} /> : (
+              <div className="h-[240px] w-[240px] flex flex-col items-center justify-center gap-3 text-slate-500 text-sm">
+                <Spinner /> جارٍ توليد رمز Telegram الحقيقي…
+              </div>
+            )}
+            <div className="text-sm font-semibold text-slate-700">
+              {TG_STATUS_LABEL[snap?.status ?? 'starting']}
+            </div>
+            {snap?.username && <div className="text-xs text-slate-500 font-mono">@{snap.username}</div>}
           </div>
-          <button type="button" disabled={saving} onClick={finish} className="btn-primary w-full">
-            {saving ? <Spinner size="sm" /> : 'حفظ وإغلاق'}
+          {snap?.status === 'password_required' && (
+            <div className="rounded-xl bg-violet-50 border border-violet-200 p-4 space-y-3">
+              <div className="text-sm text-violet-800">هذا الحساب مفعّل عليه التحقق بخطوتين. أدخل كلمة مرور Telegram لإكمال الربط؛ لن يتم حفظها.</div>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  className="input flex-1"
+                  placeholder="كلمة مرور التحقق بخطوتين"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void sendPassword(); }}
+                />
+                <button type="button" onClick={() => void sendPassword()} disabled={!password || submittingPassword} className="btn-primary">
+                  {submittingPassword ? <Spinner size="sm" /> : 'تأكيد'}
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="rounded-xl bg-sky-50 border border-sky-200 p-4 text-sm text-sky-800">
+            <div className="font-bold mb-2">📱 خطوات المسح:</div>
+            <ol className="list-decimal list-inside space-y-1.5 leading-relaxed">
+              <li>افتح تيليغرام على هاتفك</li>
+              <li>الإعدادات ← الأجهزة</li>
+              <li>اضغط «ربط جهاز سطح المكتب» وامسح الرمز</li>
+            </ol>
+            <p className="mt-2 text-xs text-sky-700">بعد المسح سيتم اعتماد الحساب وحفظ الجلسة تلقائيًا، بدون زر «تم المسح».</p>
+          </div>
+          {(error || snap?.last_error) && (
+            <div className="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">{error ?? snap?.last_error}</div>
+          )}
+          <div className="flex gap-3">
+            <button type="button" onClick={() => void begin(true)} disabled={starting} className="btn-secondary flex-1">
+              {starting ? <Spinner size="sm" /> : <><RefreshCw size={16} /> رمز جديد</>}
+            </button>
+            <button type="button" onClick={onClose} className="btn-secondary flex-1">إغلاق</button>
+          </div>
+          <button type="button" onClick={goToToken} className="w-full text-xs text-slate-500 hover:text-slate-700 underline">
+            أو اربط بوت عبر التوكن
           </button>
         </div>
       )}
@@ -1074,7 +1172,7 @@ interface Toast { id: number; msg: string; ok: boolean; }
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export function ConnectionsPage() {
   const { channels, loading, reload } = useMerchantData();
-  const { user, merchant } = useAuth();
+  const { user } = useAuth();
   const [modal, setModal]   = useState<ModalData | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -1093,7 +1191,8 @@ export function ConnectionsPage() {
     const existing = channels.find((c) => c.type === type);
 
     let step: ModalStep = 'choose';
-    if (type === 'messenger' || type === 'instagram') step = 'fb_choose';
+    if (type === 'telegram')                         step = 'tg_qr';
+    else if (type === 'messenger' || type === 'instagram') step = 'fb_choose';
     else if (type === 'website')                      step = 'widget';
     else if (!['whatsapp', 'telegram'].includes(type)) step = 'generic';
 
@@ -1132,6 +1231,25 @@ export function ConnectionsPage() {
     return inserted.id as string;
   }
 
+  async function ensureTgChannel(): Promise<string> {
+    const existing = channels.find((c) => c.type === 'telegram');
+    if (existing) return existing.id;
+
+    const { data: mId, error: rpcErr } = await supabase.rpc('get_or_create_merchant');
+    if (rpcErr || !mId) throw new Error('تعذّر تحديد المتجر. أعد تسجيل الدخول وحاول مجددًا.');
+
+    const { data: inserted, error } = await supabase.from('channels').insert({
+      merchant_id: mId as string,
+      type: 'telegram',
+      name: 'تيليغرام — حساب شخصي',
+      status: 'pending',
+      config: { method: 'qr' },
+    }).select('id').single();
+    if (error || !inserted) throw new Error(error?.message ?? 'تعذّر إنشاء قناة تيليغرام');
+    reload();
+    return inserted.id as string;
+  }
+
 
   async function saveChannel(cfg: Record<string, string>, nameOverride?: string) {
     if (!user || !modal) { toast('يرجى تسجيل الدخول أولاً', false); return; }
@@ -1139,7 +1257,6 @@ export function ConnectionsPage() {
     // Always fetch a fresh merchant ID to avoid stale-context or JWT-refresh race conditions
     const { data: freshMId, error: rpcErr } = await supabase.rpc('get_or_create_merchant');
     if (rpcErr || !freshMId) {
-      // eslint-disable-next-line no-console
       console.error('get_or_create_merchant failed:', rpcErr?.message);
       toast('تعذّر تحديد المتجر. يرجى إعادة تسجيل الدخول والمحاولة مجدداً.', false);
       return;
@@ -1189,7 +1306,6 @@ export function ConnectionsPage() {
       }
     } catch (e: unknown) {
       const errMsg = (e as { message?: string })?.message;
-      // eslint-disable-next-line no-console
       console.error('saveChannel error:', e);
       toast(`❌ ${errMsg ?? 'خطأ أثناء الحفظ'}`, false);
     }
@@ -1197,6 +1313,16 @@ export function ConnectionsPage() {
 
   async function disconnect(id: string, name: string) {
     if (!confirm(`هل تريد فصل ${name}؟`)) return;
+    const channel = channels.find((c) => c.id === id);
+    const cfg = (channel?.config ?? {}) as Record<string, string>;
+    if (channel?.type === 'telegram' && cfg.method === 'qr') {
+      try {
+        await logoutTelegramSession(id);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : '❌ تعذّر فصل جلسة تيليغرام', false);
+        return;
+      }
+    }
     const { error } = await supabase.from('channels').update({ status: 'disconnected' }).eq('id', id);
     if (error) { toast('❌ فشل الفصل', false); return; }
     reload();
@@ -1210,6 +1336,18 @@ export function ConnectionsPage() {
     try {
       const channel = channels.find((c) => c.id === id);
       const cfg = (channel?.config ?? {}) as Record<string, string>;
+
+      if (channel?.type === 'telegram' && cfg.method === 'qr') {
+        const snapshot = await getTelegramStatus(id);
+        if (snapshot.status === 'connected') {
+          await supabase.from('channels').update({ last_sync: new Date().toISOString() }).eq('id', id);
+          reload();
+          toast(`✅ ${name} متصل ويعمل عبر MTProto`);
+        } else {
+          toast(`⚠️ حالة حساب تيليغرام: ${TG_STATUS_LABEL[snapshot.status] ?? snapshot.status}`, false);
+        }
+        return;
+      }
 
       if (channel?.type === 'telegram' && cfg.bot_token) {
         const meRes = await fetch(`https://api.telegram.org/bot${cfg.bot_token}/getMe`);
@@ -1268,7 +1406,8 @@ export function ConnectionsPage() {
     if (step === 'wa_qr')     return <StepWaQr     onClose={closeModal} goToApi={() => goTo('wa_api')}
                                                   ensureChannel={ensureWaChannel} onConnected={reload} toast={toast} />;
     if (step === 'tg_token')  return <StepTgToken  data={modal} onClose={closeModal} onSave={(cfg, lbl) => saveChannel(cfg, lbl)} />;
-    if (step === 'tg_qr')     return <StepTgQr     onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
+    if (step === 'tg_qr')     return <StepTgQr     onClose={closeModal} goToToken={() => goTo('tg_token')}
+                                                   ensureChannel={ensureTgChannel} onConnected={reload} toast={toast} />;
     if (step === 'fb_choose') return <StepFbChoose data={modal} goTo={goTo} onClose={closeModal} />;
     if (step === 'fb_login')  return <StepFbLogin  data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} goToManual={() => goTo('oauth')} />;
     if (step === 'oauth')     return <StepOAuth    data={modal} onClose={closeModal} onSave={(cfg) => saveChannel(cfg)} />;
