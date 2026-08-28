@@ -1,12 +1,11 @@
 import { Outlet, NavLink, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../lib/auth';
 import { Logo, Badge } from '../../components/ui';
-import { supabase } from '../../lib/supabase';
 import {
   LayoutDashboard, MessageSquare, Users, Package, ShoppingCart, Bot,
   Zap, FileText, Workflow, BarChart3, Plug, Shield, ScrollText, CreditCard,
   Settings, HelpCircle, LogOut, Menu, X, Crown, Smartphone, Code, FlaskConical,
-  MessageCircle, Bell, Search,
+  MessageCircle, Bell, Search, Sparkles,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -24,6 +23,7 @@ const navGroups = [
   {
     title: 'الذكاء والأتمتة',
     items: [
+      { to: '/app/ai-agent', label: 'AI Agent', icon: Sparkles },
       { to: '/app/ai-studio', label: 'استوديو الذكاء', icon: Bot },
       { to: '/app/automation', label: 'قواعد الأتمتة', icon: Zap },
       { to: '/app/templates', label: 'القوالب', icon: FileText },
