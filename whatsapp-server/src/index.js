@@ -86,6 +86,22 @@ app.post('/api/sessions/:channelId/send', (req, res) =>
   })
 );
 
+// مسار داخلي للـ scheduler فقط، ولا يقبل JWT من المتصفح.
+app.post('/api/internal/sessions/:channelId/send', async (req, res) => {
+  if (req.headers['x-gateway-secret'] !== env.gatewaySecret) return res.status(401).json({ error: 'غير مصرح' });
+  const channelId = req.params.channelId;
+  if (!/^[0-9a-f-]{36}$/i.test(channelId)) return res.status(400).json({ error: 'معرّف قناة غير صالح' });
+  try {
+    const { to, text } = req.body ?? {};
+    if (!to || !text) return res.status(400).json({ error: 'المطلوب: to و text' });
+    const id = await sendText(channelId, String(to), String(text));
+    res.json({ ok: true, message_id: id });
+  } catch (e) {
+    logError('internal-api', `فشل إرسال مجدول على ${channelId}`, e);
+    res.status(500).json({ error: e instanceof Error ? e.message : 'خطأ غير متوقع' });
+  }
+});
+
 app.use((_req, res) => res.status(404).json({ error: 'المسار غير موجود' }));
 
 const server = app.listen(env.port, '0.0.0.0', async () => {
