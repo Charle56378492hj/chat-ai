@@ -15,6 +15,7 @@ import { ProductsPage } from './pages/app/ProductsPage';
 import { OrdersPage } from './pages/app/OrdersPage';
 import { OrderCreatePage } from './pages/app/OrderCreatePage';
 import { AiStudioPage } from './pages/app/AiStudioPage';
+import { AiAgentPage } from './pages/app/AiAgentPage';
 import { AutomationRulesPage } from './pages/app/AutomationRulesPage';
 import { TemplatesPage } from './pages/app/TemplatesPage';
 import { WorkflowsPage } from './pages/app/WorkflowsPage';
@@ -58,6 +59,7 @@ function AppRoutes() {
         <Route path="products" element={<ProductsPage />} />
         <Route path="orders" element={<OrdersPage />} />
         <Route path="orders/new" element={<OrderCreatePage />} />
+        <Route path="ai-agent" element={<AiAgentPage />} />
         <Route path="ai-studio" element={<AiStudioPage />} />
         <Route path="automation" element={<AutomationRulesPage />} />
         <Route path="templates" element={<TemplatesPage />} />
