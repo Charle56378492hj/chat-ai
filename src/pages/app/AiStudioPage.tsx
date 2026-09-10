@@ -253,7 +253,7 @@ export function AiStudioPage() {
         ai_model: aiConfig.ai_model ?? 'gpt-4o-mini',
         fallback_to_human: aiConfig.fallback_to_human ?? true,
         system_prompt: aiConfig.system_prompt ?? '',
-        api_key: '',
+        api_key: ((aiConfig as unknown as Record<string, unknown>).api_key as string | undefined) ?? '',
       });
     }
   }, [aiConfig]);
@@ -282,7 +282,7 @@ export function AiStudioPage() {
     setSaving(true);
     setSaveError('');
     try {
-      const payload: Record<string, unknown> = {
+      const payload = {
         assistant_name: config.assistant_name,
         tone: config.tone,
         formality: config.formality,
@@ -293,9 +293,9 @@ export function AiStudioPage() {
         ai_model: config.ai_model,
         fallback_to_human: config.fallback_to_human,
         system_prompt: config.system_prompt,
+        api_key: config.api_key,
         is_active: true,
       };
-      if (config.api_key.trim()) payload.api_key = config.api_key.trim();
       const { error } = aiConfig
         ? await supabase.from('ai_configs').update(payload).eq('id', aiConfig.id)
         : await supabase.from('ai_configs').insert({ ...payload, merchant_id: merchant.id });

@@ -38,7 +38,7 @@ export function useMerchantData() {
       supabase.from('products').select('*').eq('merchant_id', id).order('created_at', { ascending: false }),
       supabase.from('channels').select('*').eq('merchant_id', id).order('created_at', { ascending: false }),
       supabase.from('customers').select('*').eq('merchant_id', id).order('created_at', { ascending: false }),
-      supabase.from('ai_configs').select('id,merchant_id,assistant_name,tone,formality,brevity,persuasion_level,mode,ai_provider,ai_model,api_key_name,system_prompt,fallback_to_human,is_active,created_at').eq('merchant_id', id).maybeSingle(),
+      supabase.from('ai_configs').select('*').eq('merchant_id', id).maybeSingle(),
       supabase.from('automation_rules').select('*').eq('merchant_id', id).order('priority', { ascending: false }),
       supabase.from('templates').select('*').eq('merchant_id', id).order('created_at', { ascending: false }),
       supabase.from('merchant_members').select('*').eq('merchant_id', id).order('created_at', { ascending: false }),
@@ -59,9 +59,6 @@ export function useMerchantData() {
     setLoading(false);
   }
 
-  // The loader is intentionally scoped to the active merchant; it is recreated
-  // on each render because it also updates local state.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadAll(); }, [merchant?.id]);
   return { conversations, orders, products, channels, customers, aiConfig, automationRules, templates, members, subscription, workflows, loading, reload: loadAll };
 }
