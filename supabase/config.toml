@@ -1,0 +1,37 @@
+# supabase/config.toml
+#
+# ⚠️ هذا الملف كان ناقص تمامًا — وهذا هو السبب الرئيسي لعدم رد البوت.
+#
+# افتراضيًا، Supabase ينشر أي Edge Function مع تفعيل التحقق من الـ JWT
+# (verify_jwt = true). تيليغرام لما يبعت رسالة على رابط الويبهوك، ما بيبعت
+# معه أي Authorization header — فـ Supabase كان يرفض الطلب بـ 401 Unauthorized
+# قبل ما يوصل حتى لكود الدالة. النتيجة: التوكن صحيح، والذكاء الاصطناعي محفوظ،
+# وبالرغم من هيك ما في ولا رد أبدًا.
+#
+# هون منطفّي التحقق للدوال العامة المقصود إنها تُستدعى من خارج التطبيق.
+# الحماية بتصير جوّا الدالة نفسها (channel_id + secret token).
+
+project_id = "chat-ai"
+
+[functions.telegram-webhook]
+verify_jwt = false
+
+[functions.ai-proxy]
+verify_jwt = false
+
+# بوابة واتساب (Baileys) سيرفر خارجي، ما بيبعت JWT.
+# الحماية جوّا الدالة: هيدر x-gateway-secret + التحقق من القناة.
+[functions.whatsapp-inbound]
+verify_jwt = false
+
+# ماسنجر فيسبوك بيبعت أحداث الرسائل لهاد الرابط مباشرة من سيرفرات فيسبوك،
+# بدون أي Authorization header. الحماية جوّا الدالة: توقيع X-Hub-Signature-256
+verify_jwt = false
+
+# وبتحمل JWT صالح — بس منسيبها verify_jwt = false لأنها تتحقق داخليًا،
+# وحتى ما تنكسر لو المستخدم بجلسة تجديد توكن مؤقتة.
+verify_jwt = false
+
+# Google OAuth callback يصل من Google بدون JWT، بينما بقية الإجراءات
+# تتحقق داخليًا من Authorization داخل الدالة.
+verify_jwt = false
